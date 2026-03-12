@@ -1,0 +1,109 @@
+# =========================
+# 操作系统生成的文件 (Windows / macOS)
+# =========================
+[Tt]humbs.db
+ehthumbs.db
+[Dd]esktop.ini
+.DS_Store
+.DS_Store?
+._*
+.Trashes
+
+# =========================
+# Python 缓存和虚拟环境
+# =========================
+# 字节码和缓存
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 虚拟环境 (非常重要，绝对不能传到云端)
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# 打包和发布产生的文件
+build/
+dist/
+downloads/
+eggs/
+.eggs/
+*.egg-info/
+*.egg
+
+# 测试和覆盖率报告
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+.pytest_cache/
+
+# =========================
+# Office / VBA 临时文件 (针对 Excel/Word 等脚本处理)
+# =========================
+# Office 软件打开时自动产生的隐藏锁文件
+~$*.doc*
+~$*.xls*
+~$*.ppt*
+*.tmp
+*.bak
+*.swp
+
+# =========================
+# IDE / 编辑器本地配置
+# =========================
+# VS Code
+.vscode/
+!.vscode/settings.json   # 如果你希望团队共享某些设置，可以保留这行
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# JetBrains (PyCharm 等)
+.idea/
+*.iws
+*.iml
+*.ipr
+
+# 历史记录和日志
+*.log
+
+# =========================
+# PyCharm 特定补充 (JetBrains)
+# =========================
+# 之前已忽略整个 .idea/ 目录，但如果你未来和团队协作，
+# 且希望共享代码格式规范，可以取消注释下面这两行（去掉前面的 #）：
+# !.idea/codeStyles/
+# !.idea/format.xml
+
+# =========================
+# 现代 Python 代码质量工具缓存
+# =========================
+# 静态类型检查器缓存 (Mypy)
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# 代码格式化和规范检查工具缓存 (Ruff, Flake8 等)
+.ruff_cache/
+.flake8
+
+# =========================
+# Jupyter Notebook (如果在项目中做数据测试或草稿)
+# =========================
+.ipynb_checkpoints/
+profile_default/
+ipython_config.py
+
+# =========================
+# Python 依赖管理工具特定文件
+# =========================
+# 如果你未来使用 Pipenv 或 Poetry 代替原生的 venv，可以保留它们的本地环境文件
+.pipenv/
+.poetry/
