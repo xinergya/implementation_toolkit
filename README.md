@@ -67,9 +67,9 @@ python main_toolbox.py
 * `.gitignore`：Git 提交拦截规则，保持代码仓库的纯净。
 
 ## 📸 界面预览 (Screenshots)
-#主界面
+### 主界面
 ![系统主界面预览](assets/main_ui.png)
-#智能简历生成日志
+### 智能简历生成日志
 ![生成日志](assets/log_preview.png)
 ![生成日志](assets/log_preview1.png)
 
