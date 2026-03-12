@@ -1,6 +1,6 @@
 docxcompose==2.0.2
 docxtpl==0.20.2
-PyMuPDF
+PyMuPDF==1.27.2
 Jinja2==3.1.6
 pandas==3.0.1
 Pillow==12.1.1
@@ -8,4 +8,4 @@ python_docx==1.2.0
 pywin32==311
 thefuzz==0.22.1
 tkinterdnd2==0.4.3
-openpyxl
+openpyxl==3.1.5
