@@ -5,14 +5,14 @@ from tkinter import ttk
 from tkinterdnd2 import TkinterDnD
 
 # ================= 导入各个超级工具模块 =================
-from tools.resume_engine import ResumeGeneratorUI
-from tools.file_matcher_engine import AutoFileProcessorUI
-from tools.word2pdf_engine import WordToPdfUI
-from tools.word2img_engine import WordToImageUI
-from tools.pdf2img_engine import PdfToImageUI
-from tools.img_compress_engine import ImageCompressUI
-from tools.word_split_engine import WordSplitUI
-from tools.resume_extract_engine import ResumeExtractUI
+#from tools.resume_engine import ResumeGeneratorUI
+#from tools.file_matcher_engine import AutoFileProcessorUI
+#from tools.word2pdf_engine import WordToPdfUI
+#from tools.word2img_engine import WordToImageUI
+#from tools.pdf2img_engine import PdfToImageUI
+#from tools.img_compress_engine import ImageCompressUI
+#from tools.word_split_engine import WordSplitUI
+#from tools.resume_extract_engine import ResumeExtractUI
 
 # 布局配置文件名
 LAYOUT_CONFIG_FILE = "app_layout_config.json"
@@ -105,45 +105,64 @@ class MainToolbox:
         self.root.geometry(f"{w}x{h}+{x}+{y}")
         self.root.minsize(950, 700)
 
+        # 1. 先初始化 UI 全局样式
         self.setup_global_style()
-        self.setup_main_layout()
+
+        # 2. 绘制一个临时的“加载过渡屏”
+        self.loading_frame = tk.Frame(self.root, bg="#F0F2F5")
+        self.loading_frame.pack(fill=tk.BOTH, expand=True)
+        tk.Label(self.loading_frame, text="🚀 正在唤醒底层效能引擎，请稍候...",
+                 font=("Microsoft YaHei UI", 16, "bold"), fg="#0078D7", bg="#F0F2F5").pack(expand=True)
+
+        # 3. 强制系统立刻把过渡窗口弹出来给用户看
+        self.root.update()
+
+        # 4. 延迟 100 毫秒后，再去后台悄悄加载重型武器
+        self.root.after(100, self.load_heavy_engines)
 
     def setup_global_style(self):
+        """恢复被遗漏的样式设置方法"""
         style = ttk.Style()
         style.theme_use('clam')
         # 全局字体与颜色设定
         style.configure('.', font=("Microsoft YaHei UI", 10), background="#F0F2F5")
-
         # 精心调优标签页的视觉风格
         style.configure('TNotebook', background="#E1E5EA", borderwidth=0)
-
-        # 【核心修改 1：让未选中的页签变矮】
-        # padding=[左右间距, 上下间距]。将上下间距压低到 4，让后台页签显得扁平、低调
+        # 让未选中的页签变矮
         style.configure('TNotebook.Tab',
                         font=("Microsoft YaHei UI", 10, "bold"),
                         padding=[15, 4],
                         background="#D0D4D9",
                         foreground="#555555",
                         borderwidth=0)
-
-        # 【核心修改 2：让选中的页签动态拔高】
-        # expand=[左, 上, 右, 下]。当状态为 'selected' 时，顶部向上扩张 8 个像素！
+        # 让选中的页签动态拔高
         style.map('TNotebook.Tab',
                   background=[('selected', '#FFFFFF')],
                   foreground=[('selected', '#0078D7')],
                   expand=[('selected', [2, 8, 2, 0])])
 
-    def setup_main_layout(self):
-        # 顶部标题栏
-        #header_frame = tk.Frame(self.root, bg="#0078D7", height=60)
-        # header_frame.pack(fill=tk.X, side=tk.TOP)
-        #  tk.Label(header_frame, text="⚡ 实施交付综合效能工作台",
-        #   font=("Microsoft YaHei UI", 16, "bold"), fg="white", bg="#0078D7").pack(side=tk.LEFT, padx=20, pady=15)
+    def load_heavy_engines(self):
+        # 局部懒加载 —— 界面出来后再导入重型引擎
+        from tools.resume_engine import ResumeGeneratorUI
+        from tools.file_matcher_engine import AutoFileProcessorUI
+        from tools.word2pdf_engine import WordToPdfUI
+        from tools.word2img_engine import WordToImageUI
+        from tools.pdf2img_engine import PdfToImageUI
+        from tools.img_compress_engine import ImageCompressUI
+        from tools.word_split_engine import WordSplitUI
+        from tools.resume_extract_engine import ResumeExtractUI
 
-        # 提示语
-        #tk.Label(header_frame, text="💡 提示: 用鼠标长按上方标签页可自由拖拽排序哦",
-        #   font=("Microsoft YaHei UI", 9), fg="#A9D0F5", bg="#0078D7").pack(side=tk.RIGHT, padx=20, pady=15)
+        # 引擎加载完毕，销毁过渡屏
+        self.loading_frame.destroy()
 
+        # 带着刚刚加载好的模块，去渲染真正的多标签主界面
+        self.setup_main_layout(
+            ResumeGeneratorUI, AutoFileProcessorUI, WordToPdfUI,
+            WordToImageUI, PdfToImageUI, ImageCompressUI,
+            WordSplitUI, ResumeExtractUI
+        )
+
+    def setup_main_layout(self, ResumeGeneratorUI, AutoFileProcessorUI, WordToPdfUI, WordToImageUI, PdfToImageUI, ImageCompressUI, WordSplitUI, ResumeExtractUI):
         # ==========================================
         # 挂载中心 (使用全新的 DraggableNotebook)
         # ==========================================

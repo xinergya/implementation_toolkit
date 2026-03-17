@@ -17,7 +17,7 @@ CONFIG_FILE = "file_matcher_config.json"
 
 
 class AutoFileProcessorUI:
-    """文件智能匹配分发工具（已适配多标签页架构）"""
+    """文件智能匹配分发工具（V2.0 智能感知与双轨匹配重构版）"""
 
     def __init__(self, parent_frame):
         self.parent = parent_frame
@@ -30,11 +30,12 @@ class AutoFileProcessorUI:
         self.link_counter = 0
         self.current_keywords = self.load_config()
 
-        # 变量绑定
+        # UI 变量绑定
         self.excel_var = tk.StringVar(self.parent)
         self.source_var = tk.StringVar(self.parent)
         self.target_var = tk.StringVar(self.parent)
         self.keyword_var = tk.StringVar(self.parent, value=self.current_keywords)
+        self.match_mode_var = tk.StringVar(self.parent, value="OR")  # 默认使用宽松模式
 
         self.setup_ui()
 
@@ -58,45 +59,66 @@ class AutoFileProcessorUI:
 
     # ================= 适配工作台的 UI 布局 =================
     def setup_ui(self):
-        # 抛弃原有的 main_frame，直接以传入的 parent 作为底层画布
-        frame = tk.Frame(self.parent, padx=20, pady=20)
+        frame = tk.Frame(self.parent, padx=20, pady=20, bg="#FFFFFF")
         frame.pack(fill=tk.BOTH, expand=True)
 
         frame.columnconfigure(1, weight=1)
-        frame.rowconfigure(6, weight=1)  # 日志区域自适应拉伸
+        frame.rowconfigure(7, weight=1)  # 日志区域自适应拉伸向下移动一行
 
         # 1. Excel 数据源
-        tk.Label(frame, text="1. Excel 数据源:", font=("Microsoft YaHei UI", 10)).grid(row=0, column=0, sticky=tk.W,
-                                                                                       pady=5)
-        tk.Entry(frame, textvariable=self.excel_var, font=("Microsoft YaHei UI", 10)).grid(row=0, column=1, sticky=tk.EW, padx=10,
-                                                                            pady=5, ipady=3)
+        tk.Label(frame, text="1. Excel 数据源:", font=("Microsoft YaHei UI", 10), bg="#FFFFFF").grid(row=0, column=0,
+                                                                                                     sticky=tk.W,
+                                                                                                     pady=5)
+        tk.Entry(frame, textvariable=self.excel_var, font=("Microsoft YaHei UI", 10)).grid(row=0, column=1,
+                                                                                           sticky=tk.EW, padx=10,
+                                                                                           pady=5, ipady=3)
         tk.Button(frame, text="浏览...", command=self.select_excel, width=10).grid(row=0, column=2, pady=5)
 
         # 2. 源文件根目录
-        tk.Label(frame, text="2. 源文件根目录:", font=("Microsoft YaHei UI", 10)).grid(row=1, column=0, sticky=tk.W,
-                                                                                       pady=5)
-        tk.Entry(frame, textvariable=self.source_var, font=("Microsoft YaHei UI", 10)).grid(row=1, column=1, sticky=tk.EW, padx=10,
-                                                                             pady=5, ipady=3)
+        tk.Label(frame, text="2. 源文件根目录:", font=("Microsoft YaHei UI", 10), bg="#FFFFFF").grid(row=1, column=0,
+                                                                                                     sticky=tk.W,
+                                                                                                     pady=5)
+        tk.Entry(frame, textvariable=self.source_var, font=("Microsoft YaHei UI", 10)).grid(row=1, column=1,
+                                                                                            sticky=tk.EW, padx=10,
+                                                                                            pady=5, ipady=3)
         tk.Button(frame, text="浏览...", command=self.select_source, width=10).grid(row=1, column=2, pady=5)
 
         # 3. 输出保存位置
-        tk.Label(frame, text="3. 输出保存位置:", font=("Microsoft YaHei UI", 10)).grid(row=2, column=0, sticky=tk.W,
-                                                                                       pady=5)
-        tk.Entry(frame, textvariable=self.target_var, font=("Microsoft YaHei UI", 10)).grid(row=2, column=1, sticky=tk.EW, padx=10,
-                                                                             pady=5, ipady=3)
+        tk.Label(frame, text="3. 输出保存位置:", font=("Microsoft YaHei UI", 10), bg="#FFFFFF").grid(row=2, column=0,
+                                                                                                     sticky=tk.W,
+                                                                                                     pady=5)
+        tk.Entry(frame, textvariable=self.target_var, font=("Microsoft YaHei UI", 10)).grid(row=2, column=1,
+                                                                                            sticky=tk.EW, padx=10,
+                                                                                            pady=5, ipady=3)
         tk.Button(frame, text="浏览...", command=self.select_target, width=10).grid(row=2, column=2, pady=5)
 
         # 4. 检索关键字
-        tk.Label(frame, text="4. 检索关键字:", font=("Microsoft YaHei UI", 10)).grid(row=3, column=0, sticky=tk.NW,
-                                                                                     pady=(12, 5))
-        tk.Entry(frame, textvariable=self.keyword_var, font=("Microsoft YaHei UI", 10)).grid(row=3, column=1, columnspan=2, sticky=tk.EW, padx=10,
-                                                            pady=(12, 5), ipady=3)
-        tk.Label(frame, text="* 多个关键字请用逗号分隔（支持中英文逗号），支持模糊匹配。",
-                 font=("Microsoft YaHei UI", 9), fg="#6C757D").grid(row=4, column=1, sticky=tk.W, padx=10)
+        tk.Label(frame, text="4. 检索关键字:", font=("Microsoft YaHei UI", 10), bg="#FFFFFF").grid(row=3, column=0,
+                                                                                                   sticky=tk.NW,
+                                                                                                   pady=(12, 5))
+        tk.Entry(frame, textvariable=self.keyword_var, font=("Microsoft YaHei UI", 10)).grid(row=3, column=1,
+                                                                                             columnspan=2, sticky=tk.EW,
+                                                                                             padx=10, pady=(12, 5),
+                                                                                             ipady=3)
+        tk.Label(frame, text="* 多个关键字请用逗号分隔，支持模糊匹配。", font=("Microsoft YaHei UI", 9), fg="#6C757D",
+                 bg="#FFFFFF").grid(row=4, column=1, sticky=tk.W, padx=10)
 
-        # 5. 控制按钮区 (采用统一样式的着色按钮)
-        btn_frame = tk.Frame(frame)
-        btn_frame.grid(row=5, column=0, columnspan=3, pady=20, sticky=tk.EW)
+        # 5. 【新增】匹配模式策略
+        tk.Label(frame, text="5. 匹配策略:", font=("Microsoft YaHei UI", 10, "bold"), bg="#FFFFFF", fg="#0078D7").grid(
+            row=5, column=0, sticky=tk.W, pady=10)
+        mode_frame = tk.Frame(frame, bg="#FFFFFF")
+        mode_frame.grid(row=5, column=1, columnspan=2, sticky=tk.W, padx=5, pady=10)
+
+        tk.Radiobutton(mode_frame, text="宽松模式：(工号 或 姓名) + 关键字", variable=self.match_mode_var, value="OR",
+                       font=("Microsoft YaHei UI", 10), bg="#FFFFFF", activebackground="#FFFFFF").pack(side=tk.LEFT,
+                                                                                                       padx=5)
+        tk.Radiobutton(mode_frame, text="严格模式：(工号 与 姓名) + 关键字", variable=self.match_mode_var, value="AND",
+                       font=("Microsoft YaHei UI", 10), bg="#FFFFFF", activebackground="#FFFFFF").pack(side=tk.LEFT,
+                                                                                                       padx=15)
+
+        # 6. 控制按钮区
+        btn_frame = tk.Frame(frame, bg="#FFFFFF")
+        btn_frame.grid(row=6, column=0, columnspan=3, pady=15, sticky=tk.EW)
         btn_frame.columnconfigure((0, 1, 2), weight=1)
 
         self.btn_start = tk.Button(btn_frame, text="▶ 开始智能分发", font=("Microsoft YaHei UI", 11, "bold"),
@@ -111,12 +133,12 @@ class AutoFileProcessorUI:
                                     command=self.cancel_processing, state=tk.DISABLED)
         self.btn_cancel.grid(row=0, column=2, padx=5, sticky=tk.EW, ipady=5)
 
-        # 6. 富文本日志区
+        # 7. 富文本日志区
         self.log_area = scrolledtext.ScrolledText(
             frame, font=("Microsoft YaHei UI", 10), bg="#F8F9FA", fg="#2C3E50",
             relief=tk.FLAT, padx=12, pady=12, state=tk.DISABLED
         )
-        self.log_area.grid(row=6, column=0, columnspan=3, sticky=tk.NSEW, pady=5)
+        self.log_area.grid(row=7, column=0, columnspan=3, sticky=tk.NSEW, pady=5)
 
         # 统一的富文本标签配置
         self.log_area.tag_config("INFO", foreground="#2C3E50")
@@ -159,7 +181,6 @@ class AutoFileProcessorUI:
             self.log_area.see(tk.END)
             self.log_area.config(state=tk.DISABLED)
 
-        # 使用 self.parent.after 代替原有的 self.root.after
         self.parent.after(0, update_ui)
 
     def toggle_pause(self):
@@ -184,8 +205,9 @@ class AutoFileProcessorUI:
         excel_path = self.excel_var.get().strip().strip('"').strip("'")
         source_dir = self.source_var.get().strip().strip('"').strip("'")
         target_dir = self.target_var.get().strip().strip('"').strip("'")
-
         raw_keywords = self.keyword_var.get().strip()
+        match_mode = self.match_mode_var.get()
+
         if not raw_keywords:
             messagebox.showwarning("提示", "检索关键字不能为空！")
             return
@@ -200,7 +222,6 @@ class AutoFileProcessorUI:
             return
 
         self.save_config(raw_keywords)
-
         self._stop_event.clear()
         self._pause_event.set()
 
@@ -212,7 +233,7 @@ class AutoFileProcessorUI:
         self.log_area.delete(1.0, tk.END)
         self.log_area.config(state=tk.DISABLED)
 
-        threading.Thread(target=self.process_data, args=(excel_path, source_dir, target_dir, keywords_list),
+        threading.Thread(target=self.process_data, args=(excel_path, source_dir, target_dir, keywords_list, match_mode),
                          daemon=True).start()
 
     # ================= 核心算法 =================
@@ -223,19 +244,42 @@ class AutoFileProcessorUI:
         if not text: return ""
         return re.sub(r'[^\w\u4e00-\u9fa5]', '', str(text).lower())
 
-    def _is_file_matched(self, combined_feature, emp_name, emp_id, keywords_list):
+    def _find_target_columns(self, df):
+        """【新增】智能嗅探 Excel 表头位置"""
+        id_col, name_col = None, None
+
+        # 定义常见表头变体
+        id_keywords = ['工号', '编号', '员工编码', '人员编号', 'id']
+        name_keywords = ['姓名', '名字', '员工名称']
+
+        for col in df.columns:
+            col_str = str(col).lower()
+            if not id_col and any(k in col_str for k in id_keywords):
+                id_col = col
+            if not name_col and any(k in col_str for k in name_keywords):
+                name_col = col
+
+        return id_col, name_col
+
+    def _is_file_matched(self, combined_feature, emp_name, emp_id, keywords_list, match_mode):
+        """【重构】支持多场景的鉴权引擎"""
         clean_feature = self._clean_feature_string(combined_feature)
         clean_name = self._clean_feature_string(emp_name)
         clean_id = self._clean_feature_string(emp_id)
 
-        has_identity = False
-        if clean_id and clean_id in clean_feature:
-            has_identity = True
-        elif clean_name and clean_name in clean_feature:
-            has_identity = True
+        match_id = bool(clean_id and clean_id in clean_feature)
+        match_name = bool(clean_name and clean_name in clean_feature)
 
-        if not has_identity: return False
+        # 身份鉴权逻辑
+        if match_mode == "AND":
+            has_identity = match_id and match_name
+        else:  # "OR" 宽松模式
+            has_identity = match_id or match_name
 
+        if not has_identity:
+            return False
+
+        # 关键字鉴权逻辑 (只要包含身份，再看关键字是否匹配)
         for kw in keywords_list:
             if fuzz.partial_ratio(kw, clean_feature) >= 80:
                 return True
@@ -252,8 +296,9 @@ class AutoFileProcessorUI:
             return None
 
     # ================= 主工作流 =================
-    def process_data(self, excel_path, source_dir, target_dir, keywords_list):
-        self.log_to_ui(f"🚀 启动自动化处理进程... (当前生效关键字: {len(keywords_list)}个)", "INFO")
+    def process_data(self, excel_path, source_dir, target_dir, keywords_list, match_mode):
+        mode_text = "严格模式 (工号+姓名)" if match_mode == "AND" else "宽松模式 (工号或姓名)"
+        self.log_to_ui(f"🚀 启动自动化处理进程... | 策略: {mode_text}", "INFO")
 
         try:
             if not os.path.exists(target_dir): os.makedirs(target_dir)
@@ -275,7 +320,16 @@ class AutoFileProcessorUI:
 
             self.log_to_ui(f"✅ 索引构建完成！共检索到 {len(file_index)} 个有效文件。", "SUCCESS")
 
+            # 读取 Excel 并进行智能表头推断
             df = pd.read_excel(excel_path, dtype=str)
+            id_col, name_col = self._find_target_columns(df)
+
+            if not id_col or not name_col:
+                self.log_to_ui(f"❌ 无法在 Excel 中识别出【工号】或【姓名】列，当前列名：{list(df.columns)}", "ERROR")
+                return
+            else:
+                self.log_to_ui(f"🤖 智能表头嗅探成功：工号列=[{id_col}], 姓名列=[{name_col}]", "INFO")
+
             if "处理状态" not in df.columns: df["处理状态"] = ""
             if "落盘路径" not in df.columns: df["落盘路径"] = ""
 
@@ -286,18 +340,16 @@ class AutoFileProcessorUI:
                     break
                 self._pause_event.wait()
 
-                try:
-                    emp_id = str(row.iloc[1]).strip() if pd.notna(row.iloc[1]) else ""
-                    emp_name = str(row.iloc[2]).strip() if pd.notna(row.iloc[2]) else ""
-                except IndexError:
-                    self.log_to_ui("❌ Excel 格式错误：请确保 B 列为工号，C 列为姓名。", "ERROR")
-                    break
+                # 安全提取员工信息
+                emp_id = str(row[id_col]).strip() if pd.notna(row[id_col]) else ""
+                emp_name = str(row[name_col]).strip() if pd.notna(row[name_col]) else ""
 
-                if not emp_id and not emp_name: continue
+                if not emp_id and not emp_name:
+                    continue
 
                 matched_files = []
                 for combined_feature, original_filename, fpath in file_index:
-                    if self._is_file_matched(combined_feature, emp_name, emp_id, keywords_list):
+                    if self._is_file_matched(combined_feature, emp_name, emp_id, keywords_list, match_mode):
                         matched_files.append((original_filename, fpath))
 
                 if not matched_files:
@@ -339,6 +391,7 @@ class AutoFileProcessorUI:
                 self.log_to_ui(f"✅ {emp_name} 最终匹配并保留 {copied} 个独立文件，已归档。", "SUCCESS",
                                hyperlink_path=emp_target_dir)
 
+            # 输出结果报表
             result_excel_name = f"分发结果报表_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
             result_excel_path = os.path.join(os.path.dirname(excel_path), result_excel_name)
             df.to_excel(result_excel_path, index=False)
@@ -355,4 +408,4 @@ class AutoFileProcessorUI:
                 self.btn_pause.config(state=tk.DISABLED, text="⏸ 暂停")
                 self.btn_cancel.config(state=tk.DISABLED)
 
-            self.parent.after(0, reset_ui)  # 使用 self.parent.after
+            self.parent.after(0, reset_ui)
