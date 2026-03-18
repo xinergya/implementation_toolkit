@@ -505,11 +505,23 @@ class ImageCompressUI:
                     orig_ext = os.path.splitext(file_name)[1].lower()
                     base_name = os.path.splitext(file_name)[0]
 
+                    # 【升级版】智能目录结构继承逻辑
                     if out_mode == "new_dir":
-                        current_out_dir = tgt
-                        if not os.path.exists(current_out_dir): os.makedirs(current_out_dir)
+                        # 1. 动态提取源文件的父文件夹名称 (例如 "1_115075_吴汝超")
+                        parent_folder_name = os.path.basename(os.path.dirname(file_path))
+
+                        # 2. 边缘防御：防止用户直接拖拽磁盘根目录的图片导致解析为空
+                        if not parent_folder_name:
+                            parent_folder_name = "未分类图片"
+
+                        # 3. 拼接生成专属的子目录路径
+                        current_out_dir = os.path.join(tgt, parent_folder_name)
+
+                        # 4. 动态创建子目录
+                        if not os.path.exists(current_out_dir):
+                            os.makedirs(current_out_dir)
                     else:
-                        current_out_dir = os.path.dirname(file_path)
+                        current_out_dir = os.path.dirname(file_path)  # 原位覆盖模式保持不变
 
                     # 【修复 1】使用 UUID4 确保零碰撞，彻底避免并发临时文件冲突
                     out_ext = orig_ext
