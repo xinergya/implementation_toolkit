@@ -13,11 +13,9 @@ from thefuzz import fuzz
 # ================= 全局常量配置 =================
 VALID_EXTENSIONS = {'.pdf', '.jpg', '.jpeg', '.png', '.gif', '.jfif', '.bmp', '.heic'}
 DEFAULT_KEYWORDS = "证书, 毕业, 学位, 技能, 资质, 身份, 高级, 中级, 学信网, 学历"
-CONFIG_FILE = "file_matcher_config.json"
-
 
 class AutoFileProcessorUI:
-    """文件智能匹配分发工具（V2.0 智能感知与双轨匹配重构版）"""
+    """文件智能匹配分发工具（V3.0 极速 Hash 引擎与精简报表版）"""
 
     def __init__(self, parent_frame):
         self.parent = parent_frame
@@ -28,34 +26,17 @@ class AutoFileProcessorUI:
         self._pause_event.set()
 
         self.link_counter = 0
-        self.current_keywords = self.load_config()
+        self.current_keywords = DEFAULT_KEYWORDS  # 修复 1：彻底移除 load_config
+
 
         # UI 变量绑定
         self.excel_var = tk.StringVar(self.parent)
         self.source_var = tk.StringVar(self.parent)
         self.target_var = tk.StringVar(self.parent)
         self.keyword_var = tk.StringVar(self.parent, value=self.current_keywords)
-        self.match_mode_var = tk.StringVar(self.parent, value="OR")  # 默认使用宽松模式
+        self.match_mode_var = tk.StringVar(self.parent, value="AND")  # 默认使用严格模式
 
         self.setup_ui()
-
-    # ================= 配置文件读写逻辑 =================
-    def load_config(self):
-        if os.path.exists(CONFIG_FILE):
-            try:
-                with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-                    config = json.load(f)
-                    return config.get("keywords", DEFAULT_KEYWORDS)
-            except Exception:
-                pass
-        return DEFAULT_KEYWORDS
-
-    def save_config(self, keywords_str):
-        try:
-            with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
-                json.dump({"keywords": keywords_str}, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            self.log_to_ui(f"⚠️ 配置文件保存失败: {str(e)}", "WARNING")
 
     # ================= 适配工作台的 UI 布局 =================
     def setup_ui(self):
@@ -93,28 +74,20 @@ class AutoFileProcessorUI:
         tk.Button(frame, text="浏览...", command=self.select_target, width=10).grid(row=2, column=2, pady=5)
 
         # 4. 检索关键字
-        tk.Label(frame, text="4. 检索关键字:", font=("Microsoft YaHei UI", 10), bg="#FFFFFF").grid(row=3, column=0,
-                                                                                                   sticky=tk.NW,
-                                                                                                   pady=(12, 5))
-        tk.Entry(frame, textvariable=self.keyword_var, font=("Microsoft YaHei UI", 10)).grid(row=3, column=1,
-                                                                                             columnspan=2, sticky=tk.EW,
-                                                                                             padx=10, pady=(12, 5),
-                                                                                             ipady=3)
+        tk.Label(frame, text="4. 检索关键字:", font=("Microsoft YaHei UI", 10), bg="#FFFFFF").grid(row=3, column=0, sticky=tk.NW, pady=(12, 5))
+        tk.Entry(frame, textvariable=self.keyword_var, font=("Microsoft YaHei UI", 10)).grid(row=3, column=1, columnspan=2, sticky=tk.EW, padx=10, pady=(12, 5), ipady=3)
         tk.Label(frame, text="* 多个关键字请用逗号分隔，支持模糊匹配。", font=("Microsoft YaHei UI", 9), fg="#6C757D",
                  bg="#FFFFFF").grid(row=4, column=1, sticky=tk.W, padx=10)
 
         # 5. 【新增】匹配模式策略
-        tk.Label(frame, text="5. 匹配策略:", font=("Microsoft YaHei UI", 10, "bold"), bg="#FFFFFF", fg="#0078D7").grid(
-            row=5, column=0, sticky=tk.W, pady=10)
+        tk.Label(frame, text="5. 匹配策略:", font=("Microsoft YaHei UI", 10, "bold"), bg="#FFFFFF", fg="#0078D7").grid(row=5, column=0, sticky=tk.W, pady=10)
         mode_frame = tk.Frame(frame, bg="#FFFFFF")
         mode_frame.grid(row=5, column=1, columnspan=2, sticky=tk.W, padx=5, pady=10)
 
-        tk.Radiobutton(mode_frame, text="宽松模式：(工号 或 姓名) + 关键字", variable=self.match_mode_var, value="OR",
-                       font=("Microsoft YaHei UI", 10), bg="#FFFFFF", activebackground="#FFFFFF").pack(side=tk.LEFT,
-                                                                                                       padx=5)
         tk.Radiobutton(mode_frame, text="严格模式：(工号 与 姓名) + 关键字", variable=self.match_mode_var, value="AND",
-                       font=("Microsoft YaHei UI", 10), bg="#FFFFFF", activebackground="#FFFFFF").pack(side=tk.LEFT,
-                                                                                                       padx=15)
+                       font=("Microsoft YaHei UI", 10), bg="#FFFFFF", activebackground="#FFFFFF").pack(side=tk.LEFT, padx=5)
+        tk.Radiobutton(mode_frame, text="宽松模式：(工号 或 姓名) + 关键字", variable=self.match_mode_var, value="OR",
+                       font=("Microsoft YaHei UI", 10), bg="#FFFFFF", activebackground="#FFFFFF").pack(side=tk.LEFT, padx=15)
 
         # 6. 控制按钮区
         btn_frame = tk.Frame(frame, bg="#FFFFFF")
@@ -221,7 +194,6 @@ class AutoFileProcessorUI:
             messagebox.showerror("错误", "Excel 数据源文件不存在！")
             return
 
-        self.save_config(raw_keywords)
         self._stop_event.clear()
         self._pause_event.set()
 
@@ -331,6 +303,10 @@ class AutoFileProcessorUI:
                 self.log_to_ui(f"❌ 无法在 Excel 中识别出【工号】或【姓名】列，请检查表头", "ERROR")
                 return
 
+            # 如果源数据没有“序号”列，自动生成
+            if "序号" not in df.columns:
+                df.insert(0, "序号", range(1, len(df) + 1))
+
             if "处理状态" not in df.columns: df["处理状态"] = ""
             if "落盘路径" not in df.columns: df["落盘路径"] = ""
 
@@ -339,7 +315,7 @@ class AutoFileProcessorUI:
             name_map = {}  # 倒排索引： clean_name -> set(row_index)
 
             for index, row in df.iterrows():
-                # 【新增防御】处理 Pandas 读取 Excel 纯数字工号时自动补 ".0" 的幽灵 Bug
+                # 防脏数据防御：拦截浮点数和空白字符（处理 Pandas 读取 Excel 纯数字工号时自动补 ".0" 的幽灵 Bug）
                 emp_id = str(row[id_col]).strip() if pd.notna(row[id_col]) else ""
                 if emp_id.endswith(".0"):
                     emp_id = emp_id[:-2]  # 将 "110385.0" 还原为 "110385"
@@ -347,6 +323,10 @@ class AutoFileProcessorUI:
                 # 【防脏数据防御 2】：强力剔除 Excel 姓名中可能混入的空格或不可见字符
                 emp_name = str(row[name_col]).strip() if pd.notna(row[name_col]) else ""
                 emp_name = re.sub(r'\s+', '', emp_name)
+
+                # 获取实际的序号（防御某些行序号为空的情况）
+                xuhao = str(row["序号"]).strip() if pd.notna(row["序号"]) else str(index + 1)
+                if xuhao.endswith(".0"): xuhao = xuhao[:-2]
 
                 if not emp_id and not emp_name: continue
 
@@ -358,7 +338,7 @@ class AutoFileProcessorUI:
                     "emp_id": emp_id,
                     "emp_name": emp_name,
                     "matched_files": [],  # 预留匹配队列
-                    "folder_name": f"{index + 1}_{self._clean_filename(emp_id)}_{self._clean_filename(emp_name)}"
+                    "folder_name": f"{xuhao} {self._clean_filename(emp_id)} {self._clean_filename(emp_name)}"
                 }
 
                 # 挂载 Hash 节点
@@ -391,9 +371,9 @@ class AutoFileProcessorUI:
                     # 维度 A：直接从原始文件名提取，保留天然边界（解决 98-110011 连字符合并问题）
                     # 【核心修复】：直接从原始 file_name 提取特征，保留连字符和空格的阻断作用！
                     # 这样 98-110011 就能被完美拆分为 '98' 和 '110011'
-                    potential_ids = set(re.findall(r'[a-zA-Z0-9]+', file_name.lower()))
+                    potential_ids = set(re.findall(r'[a-zA-Z0-9_]+', file_name.lower()))
                     # 维度 B：作为兜底，也从无符号的干净文件名中提取（解决工号本身带特殊字符被拆断的问题）
-                    potential_ids.update(re.findall(r'[a-zA-Z0-9]+', clean_fname))
+                    #potential_ids.update(re.findall(r'[a-zA-Z0-9]+', clean_fname))
 
                     matched_by_id = set()
                     for pid in potential_ids:
@@ -461,14 +441,23 @@ class AutoFileProcessorUI:
                 self.log_to_ui(f"✅ [{emp['emp_name']}] 归档 {copied} 个文件", "SUCCESS", hyperlink_path=emp_target_dir)
 
             # 输出结果报表
-            result_excel_name = f"分发结果报表_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+            final_columns = ["序号", id_col, name_col, "处理状态", "落盘路径"]
+            actual_columns = [col for col in final_columns if col in df.columns]
+            df_result = df[actual_columns]
+            strategy_name = "严格模式" if match_mode == "AND" else "宽松模式"
+            result_excel_name = f"分发结果报表_{strategy_name}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
             result_excel_path = os.path.join(os.path.dirname(excel_path), result_excel_name)
-            df.to_excel(result_excel_path, index=False)
 
-            if not self._stop_event.is_set():
-                self.log_to_ui(f"🎉 全部处理完毕！成功处理 {success_count} 名员工档案。", "SUCCESS")
-            self.log_to_ui("📊 结果状态报表已生成", "INFO", hyperlink_path=result_excel_path)
-
+            try:
+                df_result.to_excel(result_excel_path, index=False)
+                if not self._stop_event.is_set():
+                    self.log_to_ui(f"🎉 全部处理完毕！成功处理 {success_count} 名员工档案。", "SUCCESS")
+                self.log_to_ui(f"📊 {strategy_name}追踪报表已生成", "INFO", hyperlink_path=result_excel_path)
+            except PermissionError:
+                # 降级处理：文件名加时间戳后缀强制写入
+                fallback_path = result_excel_path.replace(".xlsx", f"_副本{datetime.datetime.now().strftime('%H%M%S')}.xlsx")
+                df_result.to_excel(fallback_path, index=False)
+                self.log_to_ui(f"⚠️ 原报表文件被占用，已自动另存为: {os.path.basename(fallback_path)}", "WARNING", hyperlink_path=fallback_path)
         except Exception as e:
             self.log_to_ui(f"❌ 发生全局异常: {str(e)}", "ERROR")
         finally:
