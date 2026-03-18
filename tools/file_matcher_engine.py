@@ -233,38 +233,6 @@ class AutoFileProcessorUI:
 
         return id_col, name_col
 
-    def _is_file_matched(self, original_filename, emp_name, emp_id, keywords_list, match_mode):
-        """【修复】基于原始文件名的独立鉴权引擎"""
-        # 仅针对文件名本身进行清理，杜绝父级目录特征污染
-        clean_filename = self._clean_feature_string(original_filename)
-        clean_name = self._clean_feature_string(emp_name)
-        clean_id = self._clean_feature_string(emp_id)
-
-        # 身份校验：严格在文件名范围内查找
-        match_id = bool(clean_id and clean_id in clean_filename)
-        match_name = bool(clean_name and clean_name in clean_filename)
-
-        # 身份鉴权逻辑
-        if match_mode == "AND":
-            has_identity = match_id and match_name
-        else:  # "OR" 宽松模式
-            has_identity = match_id or match_name
-
-        if not has_identity:
-            return False
-
-        # 关键字鉴权逻辑：优先进行 O(1) 的精准子串匹配，再使用 Fuzz 兜底
-        for kw in keywords_list:
-            clean_kw = self._clean_feature_string(kw)
-            if not clean_kw:
-                continue
-
-            # 优化：精准包含直接返回 True，否则计算相似度
-            if clean_kw in clean_filename or fuzz.partial_ratio(clean_kw, clean_filename) >= 80:
-                return True
-
-        return False
-
     def _get_file_md5(self, filepath):
         hasher = hashlib.md5()
         try:
