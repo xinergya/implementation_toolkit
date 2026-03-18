@@ -261,14 +261,16 @@ class AutoFileProcessorUI:
 
         return id_col, name_col
 
-    def _is_file_matched(self, combined_feature, emp_name, emp_id, keywords_list, match_mode):
-        """【重构】支持多场景的鉴权引擎"""
-        clean_feature = self._clean_feature_string(combined_feature)
+    def _is_file_matched(self, original_filename, emp_name, emp_id, keywords_list, match_mode):
+        """【修复】基于原始文件名的独立鉴权引擎"""
+        # 仅针对文件名本身进行清理，杜绝父级目录特征污染
+        clean_filename = self._clean_feature_string(original_filename)
         clean_name = self._clean_feature_string(emp_name)
         clean_id = self._clean_feature_string(emp_id)
 
-        match_id = bool(clean_id and clean_id in clean_feature)
-        match_name = bool(clean_name and clean_name in clean_feature)
+        # 身份校验：严格在文件名范围内查找
+        match_id = bool(clean_id and clean_id in clean_filename)
+        match_name = bool(clean_name and clean_name in clean_filename)
 
         # 身份鉴权逻辑
         if match_mode == "AND":
@@ -279,10 +281,16 @@ class AutoFileProcessorUI:
         if not has_identity:
             return False
 
-        # 关键字鉴权逻辑 (只要包含身份，再看关键字是否匹配)
+        # 关键字鉴权逻辑：优先进行 O(1) 的精准子串匹配，再使用 Fuzz 兜底
         for kw in keywords_list:
-            if fuzz.partial_ratio(kw, clean_feature) >= 80:
+            clean_kw = self._clean_feature_string(kw)
+            if not clean_kw:
+                continue
+
+            # 优化：精准包含直接返回 True，否则计算相似度
+            if clean_kw in clean_filename or fuzz.partial_ratio(clean_kw, clean_filename) >= 80:
                 return True
+
         return False
 
     def _get_file_md5(self, filepath):
@@ -295,91 +303,153 @@ class AutoFileProcessorUI:
         except Exception:
             return None
 
+    def _check_keywords(self, clean_filename, keywords_list):
+        """高速关键字拦截引擎"""
+        for kw in keywords_list:
+            clean_kw = self._clean_feature_string(kw)
+            if not clean_kw:
+                continue
+            # 优先使用底层 C 实现的 in 操作符，失败后再进行模糊计算兜底
+            if clean_kw in clean_filename or fuzz.partial_ratio(clean_kw, clean_filename) >= 80:
+                return True
+        return False
+
     # ================= 主工作流 =================
     def process_data(self, excel_path, source_dir, target_dir, keywords_list, match_mode):
         mode_text = "严格模式 (工号+姓名)" if match_mode == "AND" else "宽松模式 (工号或姓名)"
-        self.log_to_ui(f"🚀 启动自动化处理进程... | 策略: {mode_text}", "INFO")
+        self.log_to_ui(f"🚀 启动极速处理引擎... | 策略: {mode_text} | 架构: 双轨 Hash 映射", "INFO")
 
         try:
             if not os.path.exists(target_dir): os.makedirs(target_dir)
 
-            self.log_to_ui("📂 正在扫描源目录并构建上下文特征库...", "INFO")
-            file_index = []
-            for root_dir, _, files in os.walk(source_dir):
-                if self._stop_event.is_set():
-                    self.log_to_ui("⚠️ 扫描阶段被取消！", "ERROR")
-                    return
-                self._pause_event.wait()
-
-                parent_folder = os.path.basename(root_dir)
-                for file_name in files:
-                    ext = os.path.splitext(file_name)[1].lower()
-                    if ext in VALID_EXTENSIONS:
-                        combined_feature = f"{parent_folder}_{file_name}"
-                        file_index.append((combined_feature, file_name, os.path.join(root_dir, file_name)))
-
-            self.log_to_ui(f"✅ 索引构建完成！共检索到 {len(file_index)} 个有效文件。", "SUCCESS")
-
-            # 读取 Excel 并进行智能表头推断
+            # ================= 阶段 1：解析 Excel，构建倒排索引 (O(N)) =================
+            self.log_to_ui("📊 正在构建员工实体 Hash 索引库...", "INFO")
             df = pd.read_excel(excel_path, dtype=str)
             id_col, name_col = self._find_target_columns(df)
 
             if not id_col or not name_col:
-                self.log_to_ui(f"❌ 无法在 Excel 中识别出【工号】或【姓名】列，当前列名：{list(df.columns)}", "ERROR")
+                self.log_to_ui(f"❌ 无法在 Excel 中识别出【工号】或【姓名】列，请检查表头", "ERROR")
                 return
-            else:
-                self.log_to_ui(f"🤖 智能表头嗅探成功：工号列=[{id_col}], 姓名列=[{name_col}]", "INFO")
 
             if "处理状态" not in df.columns: df["处理状态"] = ""
             if "落盘路径" not in df.columns: df["落盘路径"] = ""
 
-            success_count = 0
+            employees = {}  # 索引主存： row_index -> 员工档案字典
+            id_map = {}  # 倒排索引： clean_id -> set(row_index)
+            name_map = {}  # 倒排索引： clean_name -> set(row_index)
+
             for index, row in df.iterrows():
-                if self._stop_event.is_set():
-                    self.log_to_ui("⚠️ 任务已被强制取消，正在保存已处理进度...", "ERROR")
-                    break
+                # 【新增防御】处理 Pandas 读取 Excel 纯数字工号时自动补 ".0" 的幽灵 Bug
+                emp_id = str(row[id_col]).strip() if pd.notna(row[id_col]) else ""
+                if emp_id.endswith(".0"):
+                    emp_id = emp_id[:-2]  # 将 "110385.0" 还原为 "110385"
+
+                # 【防脏数据防御 2】：强力剔除 Excel 姓名中可能混入的空格或不可见字符
+                emp_name = str(row[name_col]).strip() if pd.notna(row[name_col]) else ""
+                emp_name = re.sub(r'\s+', '', emp_name)
+
+                if not emp_id and not emp_name: continue
+
+                clean_id = self._clean_feature_string(emp_id)
+                clean_name = self._clean_feature_string(emp_name)
+
+                # 初始化员工对象
+                employees[index] = {
+                    "emp_id": emp_id,
+                    "emp_name": emp_name,
+                    "matched_files": [],  # 预留匹配队列
+                    "folder_name": f"{index + 1}_{self._clean_filename(emp_id)}_{self._clean_filename(emp_name)}"
+                }
+
+                # 挂载 Hash 节点
+                if clean_id: id_map.setdefault(clean_id, set()).add(index)
+                if clean_name: name_map.setdefault(clean_name, set()).add(index)
+
+            self.log_to_ui(f"✅ 索引构建完毕，共装载 {len(employees)} 条员工主数据。", "SUCCESS")
+
+            # ================= 阶段 2：单次遍历磁盘，极速反向寻址 (O(M)) =================
+            self.log_to_ui("📂 正在进行全局高速扫盘与特征解析...", "INFO")
+
+            matched_relationship_count = 0
+            for root_dir, _, files in os.walk(source_dir):
+                if self._stop_event.is_set(): break
                 self._pause_event.wait()
 
-                # 安全提取员工信息
-                emp_id = str(row[id_col]).strip() if pd.notna(row[id_col]) else ""
-                emp_name = str(row[name_col]).strip() if pd.notna(row[name_col]) else ""
+                for file_name in files:
+                    ext = os.path.splitext(file_name)[1].lower()
+                    if ext not in VALID_EXTENSIONS: continue
 
-                if not emp_id and not emp_name:
-                    continue
+                    fpath = os.path.join(root_dir, file_name)
+                    clean_fname = self._clean_feature_string(file_name)
 
-                matched_files = []
-                for combined_feature, original_filename, fpath in file_index:
-                    if self._is_file_matched(combined_feature, emp_name, emp_id, keywords_list, match_mode):
-                        matched_files.append((original_filename, fpath))
+                    # 【性能爆点 1】前置校验：如果文件不是目标资产（证书/资质等），直接抛弃
+                    if not self._check_keywords(clean_fname, keywords_list):
+                        continue
 
+                    # 【性能爆点 2】提取潜在特征并触发 Hash 寻址
+                    # 工号检索：提取文件名中的连续数字/字母串，去 id_map 中 O(1) 瞬间定位
+                    # 维度 A：直接从原始文件名提取，保留天然边界（解决 98-110011 连字符合并问题）
+                    # 【核心修复】：直接从原始 file_name 提取特征，保留连字符和空格的阻断作用！
+                    # 这样 98-110011 就能被完美拆分为 '98' 和 '110011'
+                    potential_ids = set(re.findall(r'[a-zA-Z0-9]+', file_name.lower()))
+                    # 维度 B：作为兜底，也从无符号的干净文件名中提取（解决工号本身带特殊字符被拆断的问题）
+                    potential_ids.update(re.findall(r'[a-zA-Z0-9]+', clean_fname))
+
+                    matched_by_id = set()
+                    for pid in potential_ids:
+                        if pid in id_map:
+                            matched_by_id.update(id_map[pid])
+
+                    # 姓名检索：调用底层 C 实现的字符串包含检测
+                    matched_by_name = set()
+                    for cname, indices in name_map.items():
+                        if cname in clean_fname:
+                            matched_by_name.update(indices)
+
+                    # 执行鉴权策略：将文件分发给对应的候选员工
+                    if match_mode == "AND":
+                        target_indices = matched_by_id & matched_by_name
+                    else:  # OR 模式
+                        target_indices = matched_by_id | matched_by_name
+
+                    # 将文件压入对应员工的待处理队列
+                    for idx in target_indices:
+                        employees[idx]["matched_files"].append((file_name, fpath))
+                        matched_relationship_count += 1
+
+            if self._stop_event.is_set(): return
+            self.log_to_ui(f"🎯 特征寻址完成！建立命中映射: {matched_relationship_count} 组。开始物理归档...", "INFO")
+
+            # ================= 阶段 3：执行物理文件落盘 (I/O) =================
+            success_count = 0
+            for index, emp in employees.items():
+                if self._stop_event.is_set(): break
+                self._pause_event.wait()
+
+                matched_files = emp["matched_files"]
                 if not matched_files:
                     df.at[index, "处理状态"] = "⚠️ 未匹配到资质材料"
                     continue
 
-                folder_name = f"{index + 1}_{self._clean_filename(emp_id)}_{self._clean_filename(emp_name)}"
-                emp_target_dir = os.path.join(target_dir, folder_name)
-
+                emp_target_dir = os.path.join(target_dir, emp["folder_name"])
                 if not os.path.exists(emp_target_dir): os.makedirs(emp_target_dir)
 
                 copied = 0
                 seen_hashes = set()
 
                 for fname, fpath in matched_files:
-                    if self._stop_event.is_set(): break
-                    self._pause_event.wait()
-
+                    # 文件排重机制
                     file_md5 = self._get_file_md5(fpath)
                     if file_md5:
-                        if file_md5 in seen_hashes:
-                            self.log_to_ui(f"🔂 拦截到内容重复的文件，已跳过: {fname}", "WARNING")
-                            continue
+                        if file_md5 in seen_hashes: continue
                         seen_hashes.add(file_md5)
 
                     dst_path = os.path.join(emp_target_dir, fname)
-                    base, ext = os.path.splitext(fname)
+                    base, target_ext = os.path.splitext(fname)
                     counter = 1
+                    # 命名冲突处理
                     while os.path.exists(dst_path):
-                        dst_path = os.path.join(emp_target_dir, f"{base}({counter}){ext}")
+                        dst_path = os.path.join(emp_target_dir, f"{base}({counter}){target_ext}")
                         counter += 1
 
                     shutil.copy2(fpath, dst_path)
@@ -388,8 +458,7 @@ class AutoFileProcessorUI:
                 df.at[index, "处理状态"] = f"✅ 已成功归档 {copied} 个文件"
                 df.at[index, "落盘路径"] = emp_target_dir
                 success_count += 1
-                self.log_to_ui(f"✅ {emp_name} 最终匹配并保留 {copied} 个独立文件，已归档。", "SUCCESS",
-                               hyperlink_path=emp_target_dir)
+                self.log_to_ui(f"✅ [{emp['emp_name']}] 归档 {copied} 个文件", "SUCCESS", hyperlink_path=emp_target_dir)
 
             # 输出结果报表
             result_excel_name = f"分发结果报表_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
