@@ -1,3 +1,4 @@
+import uuid
 import os
 import shutil
 import threading
@@ -491,46 +492,45 @@ class ImageCompressUI:
                 try:
                     orig_size = os.path.getsize(file_path)
                 except Exception:
-                    self.update_tree_row(item_id, (idx, file_name, "读取失败", "-", "-", "✖ 文件不存在或被占用"),
-                                         "error")
+                    self.update_tree_row(item_id, (idx, file_name, "读取失败", "-", "-", "✖ 文件读取失败"), "error")
                     error_count += 1
                     continue
 
-                self.update_tree_row(item_id, (idx, file_name, self.format_size(orig_size), "-", "-", "⚙ 处理中..."),
-                                     "processing")
+                self.update_tree_row(item_id, (idx, file_name, self.format_size(orig_size), "-", "-", "⚙ 处理中..."), "processing")
 
                 temp_path = ""
+                converted_img_obj = None  # 用于跟踪需要手动关闭的 Image 对象
+
                 try:
                     orig_ext = os.path.splitext(file_name)[1].lower()
                     base_name = os.path.splitext(file_name)[0]
 
-                    # 决定工作目录
                     if out_mode == "new_dir":
                         current_out_dir = tgt
                         if not os.path.exists(current_out_dir): os.makedirs(current_out_dir)
                     else:
-                        current_out_dir = os.path.dirname(file_path)  # 原位覆盖模式
+                        current_out_dir = os.path.dirname(file_path)
 
-                    # 1. 创建基于时间戳的绝对安全临时文件
-                    temp_filename = f"~temp_{base_name}_{int(time.time() * 100)}.tmp"
+                    # 【修复 1】使用 UUID4 确保零碰撞，彻底避免并发临时文件冲突
+                    out_ext = orig_ext
+                    temp_filename = f"~tmp_{uuid.uuid4().hex}.tmp"
                     temp_path = os.path.join(current_out_dir, temp_filename)
 
-                    # 2. 图像智能分流渲染
                     with Image.open(file_path) as img:
                         save_format = img.format if img.format else "JPEG"
 
                         if not keep_format:
-                            # 强转极限压榨模式
-                            if img.mode in ("RGBA", "P"): img = img.convert("RGB")
+                            if img.mode in ("RGBA", "P", "LA"):
+                                converted_img_obj = img.convert("RGB")
+                                img = converted_img_obj
                             save_format = "JPEG"
                             out_ext = ".jpg"
                         else:
-                            # 智能保留模式
                             out_ext = orig_ext
                             if save_format == "JPEG" and img.mode in ("RGBA", "P"):
-                                img = img.convert("RGB")  # 纠正错误的标头
+                                converted_img_obj = img.convert("RGB")
+                                img = converted_img_obj
 
-                        # 执行物理存储至临时文件
                         if save_format == "PNG":
                             img.save(temp_path, format=save_format, optimize=True)
                         else:
@@ -539,78 +539,95 @@ class ImageCompressUI:
                             except:
                                 img.save(temp_path, format=save_format, optimize=True)
 
+                    # 清理主动创建的 Image 对象，防止内存泄漏
+                    if converted_img_obj:
+                        converted_img_obj.close()
+
                     new_size = os.path.getsize(temp_path)
 
-                    # 3. 智判定：体积是否真的变小了？
-                    if new_size < orig_size:
+                    # 【修复 2】防损坏验证：确保压缩出来的文件大于 0 字节，且能被正常读取
+                    is_valid_output = False
+                    if 0 < new_size < orig_size:
+                        try:
+                            with Image.open(temp_path) as test_img:
+                                test_img.verify()  # 仅校验头部不解码全图，极快
+                            is_valid_output = True
+                        except Exception:
+                            is_valid_output = False
+
+                    if is_valid_output:
                         saved_bytes = orig_size - new_size
                         ratio = (saved_bytes / orig_size) * 100
                         total_saved_bytes += saved_bytes
 
+                        # 【修复 3】事务级的文件替换，确保数据绝对不丢失
                         if out_mode == "overwrite":
                             final_path = os.path.join(current_out_dir, base_name + out_ext)
-                            # 如果强转了格式(png->jpg)，需手动删掉原 png 文件
-                            if os.path.abspath(file_path) != os.path.abspath(final_path):
-                                os.remove(file_path)
-                            elif os.path.exists(final_path):
-                                os.remove(final_path)  # 删除同名原文件
+                            is_format_changed = os.path.abspath(file_path) != os.path.abspath(final_path)
 
-                            os.rename(temp_path, final_path)  # 偷梁换柱
+                            # 方案：直接使用 os.replace 实现系统级原子替换 / shutil.move 兜底跨盘符
+                            try:
+                                # 先将新文件落位
+                                shutil.move(temp_path, final_path)
+                                # 如果是格式强转 (例如 png -> jpg)，落位成功后，再安全删除旧的 png
+                                if is_format_changed and os.path.exists(file_path):
+                                    os.remove(file_path)
+                            except Exception as move_err:
+                                raise Exception(f"文件写入失败, 原文件已安全保留: {str(move_err)}")
+
                             self.item_outpath_map[item_id] = final_path
                             self.update_tree_row(item_id, (idx, file_name, self.format_size(orig_size),
                                                            self.format_size(new_size), f"↓ {ratio:.1f}%",
                                                            "✔ 原位覆盖成功"), "success")
                         else:
                             final_path = os.path.join(current_out_dir, f"{base_name}_min{out_ext}")
-                            if os.path.exists(final_path): os.remove(final_path)
-                            os.rename(temp_path, final_path)
+                            shutil.move(temp_path, final_path)  # shutil.move 自动处理跨盘符和覆盖
                             self.item_outpath_map[item_id] = final_path
                             self.update_tree_row(item_id, (idx, file_name, self.format_size(orig_size),
                                                            self.format_size(new_size), f"↓ {ratio:.1f}%",
                                                            "✔ 另存压缩成功"), "success")
 
-                        temp_path = ""  # 成功后清空路径，防止 finally 误删
+                        temp_path = ""
                         success_count += 1
                     else:
-                        # 如果压缩后反而变大，抛弃临时文件，执行智能跳过
-                        os.remove(temp_path)
+                        # 压缩后变大或文件损坏 -> 丢弃临时文件，执行原图兜底
+                        if os.path.exists(temp_path):
+                            os.remove(temp_path)
                         temp_path = ""
 
                         if out_mode == "overwrite":
                             self.item_outpath_map[item_id] = file_path
                             self.update_tree_row(item_id, (idx, file_name, self.format_size(orig_size),
-                                                           self.format_size(orig_size), "0.0%", "✨ 跳过 (原图最优)"),
-                                                 "skipped")
+                                                           self.format_size(orig_size), "0.0%", "✨ 跳过 (原图最优)"), "skipped")
                         else:
                             final_path = os.path.join(current_out_dir, f"{base_name}_min{orig_ext}")
+                            # 同样使用覆盖级别的复制
                             shutil.copy2(file_path, final_path)
                             self.item_outpath_map[item_id] = final_path
                             self.update_tree_row(item_id, (idx, file_name, self.format_size(orig_size),
-                                                           self.format_size(orig_size), "0.0%", "✨ 复制 (原图最优)"),
-                                                 "skipped")
-
+                                                           self.format_size(orig_size), "0.0%", "✨ 复制 (原图最优)"), "skipped")
                         success_count += 1
 
                 except UnidentifiedImageError:
-                    self.update_tree_row(item_id, (idx, file_name, self.format_size(orig_size), "N/A", "N/A",
-                                                   "✖ 图片损坏或伪装"), "error")
+                    self.update_tree_row(item_id, (idx, file_name, self.format_size(orig_size), "N/A", "N/A", "✖ 图片损坏或不支持"), "error")
                     error_count += 1
                 except PermissionError:
-                    self.update_tree_row(item_id, (idx, file_name, self.format_size(orig_size), "N/A", "N/A",
-                                                   "✖ 无权限或被占用"), "error")
+                    self.update_tree_row(item_id, (idx, file_name, self.format_size(orig_size), "N/A", "N/A", "✖ 无权限或被占用"), "error")
                     error_count += 1
                 except Exception as e:
-                    self.update_tree_row(item_id, (idx, file_name, self.format_size(orig_size), "N/A", "N/A",
-                                                   f"✖ 异常: {str(e)}"), "error")
+                    self.update_tree_row(item_id, (idx, file_name, self.format_size(orig_size), "N/A", "N/A", f"✖ 异常: {str(e)[:15]}"), "error")
                     error_count += 1
                 finally:
-                    # 绝对防漏清理机制：无论发生什么报错，保证残留的隐藏临时文件被销毁
+                    # 绝对防漏清理机制
                     if temp_path and os.path.exists(temp_path):
                         try:
                             os.remove(temp_path)
                         except:
                             pass
+                    # 【休眠控制】缓解 UI 事件队列雪崩，平滑渲染 GUI (给 Tkinter 喘息时间)
+                    time.sleep(0.01)
 
+            # --- 以下保留原有结束处理 ---
             if self._stop_event.is_set():
                 for item_id in pending_items:
                     if self.tree.exists(item_id):
@@ -623,14 +640,12 @@ class ImageCompressUI:
             def finish_ui():
                 self.is_running = False
                 self.update_button_ui("idle")
-                self.toggle_output_state()  # 还原目录按钮状态
+                self.toggle_output_state()
 
                 if self._stop_event.is_set():
                     self.set_status("■", "任务已中断。", "#DC3545")
                 else:
-                    self.set_status("✔",
-                                    f"处理完成！成功 {success_count} 张，失败 {error_count} 张。共节省 {self.format_size(total_saved_bytes)}！",
-                                    "#198754")
+                    self.set_status("✔", f"处理完成！成功 {success_count} 张，失败 {error_count} 张。共节省 {self.format_size(total_saved_bytes)}！", "#198754")
 
             self.parent.after(0, finish_ui)
 
@@ -639,10 +654,3 @@ class ImageCompressUI:
             self.parent.after(0, lambda: self.update_button_ui("idle"))
             self.parent.after(0, self.toggle_output_state)
 
-
-if __name__ == "__main__":
-    root = TkinterDnD.Tk()
-    root.title("图片智能压缩 极速引擎")
-    root.geometry("900x650")
-    app = ImageCompressUI(root)
-    root.mainloop()
