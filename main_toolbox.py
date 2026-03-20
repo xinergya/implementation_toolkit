@@ -151,6 +151,7 @@ class MainToolbox:
         from tools.img_compress_engine import ImageCompressUI
         from tools.word_split_engine import WordSplitUI
         from tools.resume_extract_engine import ResumeExtractUI
+        from tools.pdf_to_word_engine import PDFToWordUI
 
         # 引擎加载完毕，销毁过渡屏
         self.loading_frame.destroy()
@@ -159,10 +160,10 @@ class MainToolbox:
         self.setup_main_layout(
             ResumeGeneratorUI, AutoFileProcessorUI, WordToPdfUI,
             WordToImageUI, PdfToImageUI, ImageCompressUI,
-            WordSplitUI, ResumeExtractUI
+            WordSplitUI, ResumeExtractUI,PDFToWordUI
         )
 
-    def setup_main_layout(self, ResumeGeneratorUI, AutoFileProcessorUI, WordToPdfUI, WordToImageUI, PdfToImageUI, ImageCompressUI, WordSplitUI, ResumeExtractUI):
+    def setup_main_layout(self, ResumeGeneratorUI, AutoFileProcessorUI, WordToPdfUI, WordToImageUI, PdfToImageUI, ImageCompressUI, WordSplitUI, ResumeExtractUI,PDFToWordUI):
         # ==========================================
         # 挂载中心 (使用全新的 DraggableNotebook)
         # ==========================================
@@ -209,6 +210,9 @@ class MainToolbox:
         self.notebook.add(self.tab7, text="✂️ Word拆分神器")
         WordSplitUI(self.tab7)
 
+        self.tab9 = tk.Frame(self.notebook, bg="#FFFFFF")
+        self.notebook.add(self.tab9, text="🔄 PDF转Word")
+        PDFToWordUI(self.tab9)
         # 【核心魔法】：所有标签加载完毕后，读取本地记忆的布局配置，并重新洗牌
         self.notebook.restore_layout()
 
