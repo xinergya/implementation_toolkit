@@ -283,6 +283,25 @@ class PDFToWordUI:
 
             word_doc = Document(docx_path)
 
+            # ================= 🎨 核心新增：全局中文字体兜底策略 =================
+            try:
+                from docx.oxml.ns import qn
+
+                # 获取 Word 文档的“正文”基座样式
+                normal_style = word_doc.styles['Normal']
+
+                # 1. 设置西文（英文字母/数字）的兜底字体，通常设为 Times New Roman 或与中文统一
+                normal_style.font.name = '宋体'
+
+                # 2. 【最关键一步】强行指定“东亚文字（中文）”的兜底字体为宋体
+                # 只有修改底层的 w:eastAsia 属性，Word 才会乖乖听话把默认中文渲染成宋体
+                normal_style._element.rPr.rFonts.set(qn('w:eastAsia'), '宋体')
+
+                self.log_to_ui("  └─ 🎨 已注入全局字体防线：未知中文将平滑回退至 [宋体]。")
+            except Exception as e:
+                pass  # 防御性编程，字体兜底失败不影响核心流程
+            # ======================================================================
+
             all_paras = []
             for p in word_doc.paragraphs:
                 all_paras.append(p)
