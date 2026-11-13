@@ -14,20 +14,26 @@ try:
 except ImportError:
     pd = None
 
-# 核心：操作 Windows 系统的底层库
-import win32com.client
-import pythoncom
+# 核心：操作 Windows 系统的底层库（容错导入，缺库时不拖垮整个应用）
+try:
+    import win32com.client
+    import pythoncom
+    COM_AVAILABLE = True
+except ImportError:
+    win32com = None
+    pythoncom = None
+    COM_AVAILABLE = False
+
+from utils.ui_base import BaseEngineUI
+from utils.pathutil import sanitize_filename, strip_quotes
+from utils.constants import com_error_kind
 
 
-class ResumeExtractUI:
-    """基于 Excel 数据驱动的 Word 逆向精准提取引擎 (V2.0 工业级重构版：沙箱+物理映射+无损剪裁)"""
+class ResumeExtractUI(BaseEngineUI):
+    """基于 Excel 数据驱动的 Word 逆向精准提取引擎 (V2.0 重构版：沙箱+物理映射+无损剪裁)"""
 
     def __init__(self, parent_frame):
-        self.parent = parent_frame
-
-        self._stop_event = threading.Event()
-        self._pause_event = threading.Event()
-        self._pause_event.set()
+        super().__init__(parent_frame)
 
         self.word_var = tk.StringVar()
         self.excel_var = tk.StringVar()
@@ -46,6 +52,10 @@ class ResumeExtractUI:
 
     # ================= UI 布局 =================
     def setup_ui(self):
+        if not COM_AVAILABLE:
+            tk.Label(self.parent, text="⚠️ 缺少核心运行库！请在命令行运行：pip install pywin32",
+                     fg="red", font=("Microsoft YaHei UI", 12, "bold")).pack(pady=50)
+            return
         if pd is None:
             tk.Label(self.parent, text="⚠️ 缺少核心运行库！请在命令行运行：pip install pandas openpyxl",
                      fg="red", font=("Microsoft YaHei UI", 12, "bold")).pack(pady=50)
@@ -114,7 +124,7 @@ class ResumeExtractUI:
         self.log_area.tag_bind("LINK", "<Enter>", lambda e: self.log_area.config(cursor="hand2"))
         self.log_area.tag_bind("LINK", "<Leave>", lambda e: self.log_area.config(cursor=""))
 
-        self.log_to_ui("✨ 工业级逆向精准提取引擎 (无损切割版) 已就绪！", "MAGENTA")
+        self.log_to_ui("✨ 逆向精准提取引擎 (无损切割版) 已就绪！", "MAGENTA")
         self.update_button_ui("idle")
 
     # ================= 状态机与动画 =================
@@ -282,8 +292,7 @@ class ResumeExtractUI:
 
     # ================= 辅助解析工具 =================
     def _sanitize_filename(self, filename):
-        clean = re.sub(r'[\\/:*?"<>|\r\n\t]', '_', filename)
-        return re.sub(r'_+', '_', clean).strip()[:100]
+        return sanitize_filename(filename, max_len=100)
 
     def _set_page_numbering(self, doc, start_page):
         try:
@@ -327,6 +336,9 @@ class ResumeExtractUI:
 
     # ================= 核心：物理映射与无损提取架构 =================
     def process_extraction(self, word_path, excel_path, tgt_path, search_tpl, name_tpl):
+        if not COM_AVAILABLE:
+            self.log_to_ui("❌ 缺少 pywin32 运行库，无法执行提取。", "ERROR")
+            return
         # 严格的 COM 线程初始化
         pythoncom.CoInitialize()
         word_app = None
@@ -364,7 +376,7 @@ class ResumeExtractUI:
                 tasks.append({'search_word': search_text, 'file_name': name_text})
 
             self.log_to_ui(f"  └─ 成功生成 {len(tasks)} 条提取任务。")
-            self.log_to_ui(f"\n🗺️ [阶段 2] 启动空间雷达：构建物理映射地图...", "MAGENTA")
+            self.log_to_ui(f"\n🗺️ [阶段 2] 构建物理映射地图...", "MAGENTA")
 
             # 【修复点 1】手动创建系统临时沙箱，脱离 with 语法的死板管控
             temp_dir = tempfile.mkdtemp()
@@ -488,7 +500,7 @@ class ResumeExtractUI:
 
                     self._set_page_numbering(new_doc, t.get('page', 1))
 
-                    # ⬇️ 【新增】：在这里呼叫“横线橡皮擦”
+                    # 清除页眉横线
                     self._clear_header_line(new_doc)
                     # ⬆️ ==========================
 
@@ -511,11 +523,12 @@ class ResumeExtractUI:
 
         except Exception as global_e:
             error_msg = str(global_e)
-            if "-2146959355" in error_msg or "服务器运行失败" in error_msg or "80080005" in error_msg:
+            kind = com_error_kind(error_msg)
+            if kind == "stuck":
                 self.log_to_ui("❌ Word底层卡死！请在任务管理器结束所有 WINWORD.EXE 进程。", "ERROR")
-            elif "800706BA" in error_msg or "RPC" in error_msg:
+            elif kind == "crash":
                 self.log_to_ui("❌ Word引擎崩溃！可能遇到极度庞大或损坏的表格。", "ERROR")
-            elif "Permission denied" in error_msg:
+            elif kind == "permission":
                 self.log_to_ui("❌ 权限拒绝！要保存或覆盖的文件正被另一个软件打开。", "ERROR")
             else:
                 self.log_to_ui(f"⚠️ 发生严重错误: {error_msg}", "ERROR")

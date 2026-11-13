@@ -2,6 +2,7 @@ import os
 import re
 import time
 import shutil
+import tempfile
 import threading
 import datetime
 import tkinter as tk
@@ -11,16 +12,16 @@ from tkinter import filedialog, messagebox, scrolledtext, ttk
 import win32com.client
 import pythoncom
 
+from utils.ui_base import BaseEngineUI
+from utils.constants import com_error_kind
+from utils.pathutil import sanitize_filename
 
-class WordSplitUI:
+
+class WordSplitUI(BaseEngineUI):
     """Word 超大文档极速拆分引擎 (单文件精细流 + 状态机 + 防滚日志)"""
 
     def __init__(self, parent_frame):
-        self.parent = parent_frame
-
-        self._stop_event = threading.Event()
-        self._pause_event = threading.Event()
-        self._pause_event.set()
+        super().__init__(parent_frame)
 
         self.source_var = tk.StringVar()
         self.target_var = tk.StringVar()
@@ -239,8 +240,7 @@ class WordSplitUI:
 
     # ================= 辅助方法 =================
     def _sanitize_filename(self, filename):
-        clean = re.sub(r'[\\/:*?"<>|]', '_', filename)
-        return clean[:50]
+        return sanitize_filename(filename, max_len=50)
 
     def _safe_delete(self, doc, start_pos, end_pos):
         try:
@@ -290,20 +290,16 @@ class WordSplitUI:
         start_time = time.time()
         chapters = []
         temp_master_path = ""
+        temp_dir = ""
 
         try:
             if not os.path.exists(tgt):
                 os.makedirs(tgt)
 
             self.log_to_ui(f"🧹 [阶段 1] 正在创建并清洗母版文档 (解除域链接、接受修订)...", "MAGENTA")
-            temp_master_path = os.path.join(tgt, "~temp_master_clean.docx")
-
-            # 【修复覆盖被占用】：清道夫逻辑
-            if os.path.exists(temp_master_path):
-                try:
-                    os.remove(temp_master_path)
-                except PermissionError:
-                    raise PermissionError("母版缓存文件正被其他程序打开")
+            # 使用系统临时目录存放母版缓存，避免污染用户输出目录
+            temp_dir = tempfile.mkdtemp()
+            temp_master_path = os.path.join(temp_dir, "~master_clean.docx")
 
             shutil.copy2(src, temp_master_path)
 
@@ -358,7 +354,7 @@ class WordSplitUI:
                 self.log_to_ui(f"❌ 失败: 文档中未发现该级别的标题", "ERROR")
                 return
 
-            self.log_to_ui(f"\n🚀 [阶段 3] 提取到 {total_chapters} 个稳定坐标，启动 [盲切与页码锁死] 引擎...", "MAGENTA")
+            self.log_to_ui(f"\n🚀 [阶段 3] 提取到 {total_chapters} 个稳定坐标，启动 [切割与页码锁死] 引擎...", "MAGENTA")
 
             base_filename = os.path.splitext(os.path.basename(src))[0]
             ext = os.path.splitext(src)[1]
@@ -408,9 +404,10 @@ class WordSplitUI:
                     self.log_to_ui(f"  └─ ❌ 覆盖失败: 文档被占用或无权限", "ERROR")
                 except Exception as e:
                     error_msg = str(e)
-                    if "80080005" in error_msg or "服务器运行失败" in error_msg:
+                    kind = com_error_kind(error_msg)
+                    if kind == "stuck":
                         self.log_to_ui(f"  └─ ❌ Word引擎卡死", "ERROR")
-                    elif "800706BA" in error_msg or "RPC" in error_msg:
+                    elif kind == "crash":
                         self.log_to_ui(f"  └─ ❌ Word底层崩溃闪退", "ERROR")
                     else:
                         self.log_to_ui(f"  └─ ❌ 生成失败: {error_msg}", "ERROR")
@@ -429,18 +426,16 @@ class WordSplitUI:
 
         except Exception as global_e:
             error_msg = str(global_e)
-            if "80080005" in error_msg or "服务器运行失败" in error_msg:
+            kind = com_error_kind(error_msg)
+            if kind == "stuck":
                 self.log_to_ui("❌ 底层 Word 引擎启动失败！请按下 Ctrl+Shift+Esc 结束所有 WINWORD.EXE 进程。", "ERROR")
             else:
                 self.log_to_ui(f"⚠️ 发生全局严重错误: {error_msg}", "ERROR")
 
         finally:
-            # 安全清场
-            if os.path.exists(temp_master_path):
-                try:
-                    os.remove(temp_master_path)
-                except:
-                    pass
+            # 安全清场：删除系统临时目录（含母版缓存）
+            if temp_dir and os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir, ignore_errors=True)
             if master_doc:
                 try:
                     master_doc.Close(False)

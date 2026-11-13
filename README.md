@@ -4,7 +4,7 @@
 
 ## ✨ 核心功能模块
 
-工具箱目前集成了 8 大核心效能引擎：
+工具箱目前集成了 10 大核心效能引擎：
 
 1. **📝 智能简历引擎**：结构化数据与简历模板的自动化融合与生成。
 2. **🧲 简历提取**：基于 Excel 数据驱动的逆向简历信息提取神器。
@@ -14,6 +14,8 @@
 6. **🗜️ 图片智能压缩**：在保证画质的前提下，对图像文件进行体积优化。
 7. **🔄 Word 转 PDF**：调用原生 Office 接口，实现文档格式的无损转换。
 8. **✂️ Word 拆分神器**：根据文档大纲，自动化拆分大型 Word 文档。
+9. **🔄 PDF 转 Word**：基于 `pdf2docx` 的 PDF 文档转换，并自动重建大纲。
+10. **🔄 图片批量添加生成目录**：按人员清单批量插入社保/工资图片并生成证明文档。
 
 ## 🌟 亮点特性
 
@@ -33,7 +35,7 @@
 
 ### 1. 克隆项目
 ```bash
-git clone https://github.com/xinergya/implementation_toolkit.git(https://github.com/xinergya/implementation_toolkit.git)
+git clone https://github.com/xinergya/implementation_toolkit.git
 cd implementation_toolkit
 ```
 

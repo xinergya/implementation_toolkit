@@ -16,15 +16,14 @@ from docxcompose.composer import Composer
 
 # 引入抽离出来的公共工具 (请确保你的 utils 目录结构正确)
 from utils.formatters import filter_date, filter_num, parse_dynamic_list
+from utils.ui_base import BaseEngineUI
 
 
-class ResumeGeneratorUI:
-    """智能简历引擎 (V2.0 工业级重构版：全内存I/O + 系统级临时沙箱 + OOD拆分)"""
+class ResumeGeneratorUI(BaseEngineUI):
+    """智能简历引擎 (V2.0 重构版：全内存I/O + 系统级临时沙箱 + OOD拆分)"""
 
     def __init__(self, parent_frame):
-        self.parent = parent_frame
-
-        self._stop_event = threading.Event()
+        super().__init__(parent_frame)
 
         self.tpl_path_var = tk.StringVar()
         self.data_path_var = tk.StringVar()
@@ -373,7 +372,7 @@ class ResumeGeneratorUI:
                 os.remove(merged_path)
 
             composer.save(merged_path)
-            self.log_success_link("★ 拼接大满贯！点击立即打开验收 ➔ ", merged_name, merged_path)
+            self.log_success_link("★ 拼接完成！点击立即打开验收 ➔ ", merged_name, merged_path)
 
         except PermissionError:
             self.log_to_ui("❌ [合并失败] 您正在用 Word 打开同名汇总文件，无法覆盖写入！", "ERROR")

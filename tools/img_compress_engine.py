@@ -10,27 +10,36 @@ from PIL import Image, UnidentifiedImageError
 # 核心拖拽支持库
 from tkinterdnd2 import DND_FILES, TkinterDnD
 
+from utils.tree_ui_base import TreeEngineUI
+from utils.pathutil import format_size
 
-class ImageCompressUI:
+
+class ImageCompressUI(TreeEngineUI):
     """图片智能压缩引擎 (支持混合拖拽 + 安全覆盖算法 + 智能格式分流)"""
 
-    def __init__(self, parent_frame):
-        self.parent = parent_frame
+    COLOR_START = "#1ABC9C"
+    START_TEXT = "▶ 开始智能压缩"
+    RESUME_TEXT = "▶ 继续压缩"
+    ANIM_FRAMES = ("⚙ 智能压缩中.  ", "⚙ 智能压缩中.. ", "⚙ 智能压缩中...")
+    CANCEL_CONFIRM = "确定要中止当前的压缩任务吗？\n已压缩完成的图片将被保留。"
+    STOPPING_STATUS_TEXT = "正在安全停止任务..."
+    PAUSE_STATUS_TEXT = "任务已挂起，您可以随时删除待办列表中的图片..."
+    RESUME_STATUS_TEXT = "任务已恢复，正在全力压缩..."
+    DRAG_RUNNING_WARN = "任务正在运行，请先暂停后再拖入新图片！"
+    DROP_EMPTY_MSG = "拖入的项目中没有找到支持的图片文件！"
+    ADD_FILES_TITLE = "选择图片文件"
+    ADD_FILES_FILETYPES = [("图片文件", "*.jpg;*.jpeg;*.png;*.bmp;*.webp")]
+    ADD_FOLDER_TITLE = "选择包含图片的文件夹"
+    ADD_FOLDER_EMPTY_MSG = "该目录下未找到支持的图片文件！"
+    ITEM_UNIT = "张"
+    ITEM_LABEL = "图片"
 
-        self._stop_event = threading.Event()
-        self._pause_event = threading.Event()
-        self._pause_event.set()
+    def __init__(self, parent_frame):
+        super().__init__(parent_frame)
 
         self.out_mode_var = tk.StringVar(value="new_dir")
         self.target_var = tk.StringVar()
         self.keep_format_var = tk.BooleanVar(value=True)
-
-        self.item_filepath_map = {}
-        self.item_outpath_map = {}
-
-        self.is_running = False
-        self.anim_job = None
-        self.anim_idx = 0
 
         self.setup_ui()
 
@@ -62,7 +71,7 @@ class ImageCompressUI:
         tk.Label(btn_source_frame, text="提示：支持将图片和文件夹直接混搭拖拽到下方列表中。",
                  font=("Microsoft YaHei UI", 9)).pack(side=tk.LEFT)
 
-        # 2. 【新增】：输出模式选择区
+        # 2. 输出模式选择区
         tk.Label(frame, text="2. 输出模式:", font=("Microsoft YaHei UI", 10, "bold")).grid(row=1, column=0, sticky=tk.W,
                                                                                            pady=5)
         out_mode_frame = tk.Frame(frame)
@@ -83,7 +92,7 @@ class ImageCompressUI:
         self.btn_target = tk.Button(frame, text="浏览目录...", command=self.select_target, width=12)
         self.btn_target.grid(row=2, column=2, pady=5)
 
-        # 4. 【升级】：压缩配置区 (新增格式保留开关)
+        # 4. 压缩配置区 (新增格式保留开关)
         tk.Label(frame, text="4. 压缩配置:", font=("Microsoft YaHei UI", 10, "bold")).grid(row=3, column=0, sticky=tk.W,
                                                                                            pady=5)
         config_frame = tk.Frame(frame)
@@ -197,230 +206,17 @@ class ImageCompressUI:
             if not self.is_running:
                 self.btn_open_dir.config(state=tk.NORMAL)
 
-    def set_status(self, icon, text, icon_color, text_color=None):
-        self.lbl_icon_var.set(icon)
-        self.lbl_icon.config(fg=icon_color)
-        self.lbl_summary_var.set(text)
-        self.lbl_summary.config(fg=text_color if text_color else icon_color)
+    def is_valid_file(self, path):
+        return path.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.webp'))
 
-    # ================= 动态添加文件与数据源引擎 =================
-    def is_valid_image_file(self, filename):
-        return filename.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.webp'))
+    def build_row_values(self, idx, path):
+        try:
+            size_str = format_size(os.path.getsize(path))
+        except Exception:
+            size_str = "读取失败"
+        return (idx, os.path.basename(path), size_str, "-", "-", "⌛ 等待中")
 
-    def on_drag_drop(self, event):
-        if self.is_running and not self._pause_event.is_set():
-            messagebox.showwarning("提示", "任务正在运行，请先暂停后再拖入新图片！")
-            return
-
-        dropped_paths = self.tree.tk.splitlist(event.data)
-        images_to_add = []
-
-        for path in dropped_paths:
-            if os.path.isfile(path) and self.is_valid_image_file(path):
-                images_to_add.append(path)
-            elif os.path.isdir(path):
-                for root, dirs, files in os.walk(path):
-                    for f in files:
-                        if self.is_valid_image_file(f):
-                            images_to_add.append(os.path.join(root, f))
-
-        if images_to_add:
-            self._append_to_queue(images_to_add)
-            if not self.target_var.get():
-                self.target_var.set(os.path.join(os.path.dirname(images_to_add[0]), "压缩后输出"))
-        else:
-            messagebox.showinfo("提示", "拖入的项目中没有找到支持的图片文件！")
-
-    def add_files(self):
-        paths = filedialog.askopenfilenames(title="选择图片文件",
-                                            filetypes=[("图片文件", "*.jpg;*.jpeg;*.png;*.bmp;*.webp")])
-        if paths:
-            valid_paths = [p for p in paths if self.is_valid_image_file(p)]
-            self._append_to_queue(valid_paths)
-            if valid_paths and not self.target_var.get():
-                self.target_var.set(os.path.join(os.path.dirname(valid_paths[0]), "压缩后输出"))
-
-    def add_folder(self):
-        path = filedialog.askdirectory(title="选择包含图片的文件夹")
-        if path:
-            found_images = []
-            for root, dirs, files in os.walk(path):
-                for f in files:
-                    if self.is_valid_image_file(f):
-                        found_images.append(os.path.join(root, f))
-            if found_images:
-                self._append_to_queue(found_images)
-                if not self.target_var.get():
-                    self.target_var.set(os.path.join(path, "压缩后输出"))
-            else:
-                messagebox.showinfo("扫描结果", "该目录下未找到支持的图片文件！")
-
-    def _append_to_queue(self, paths):
-        existing_paths = list(self.item_filepath_map.values())
-        added_count = 0
-
-        for path in paths:
-            if path not in existing_paths:
-                idx = len(self.tree.get_children()) + 1
-                file_name = os.path.basename(path)
-                try:
-                    orig_size = os.path.getsize(path)
-                    size_str = self.format_size(orig_size)
-                except Exception:
-                    size_str = "读取失败"
-
-                item_id = self.tree.insert("", tk.END, values=(idx, file_name, size_str, "-", "-", "⌛ 等待中"),
-                                           tags=("pending",))
-                self.item_filepath_map[item_id] = path
-                added_count += 1
-
-        self.set_status("✔", f"成功加载 {added_count} 张图片。队列中共 {len(self.tree.get_children())} 张。", "#198754")
-
-    def clear_list(self):
-        if self.is_running and not self._pause_event.is_set():
-            messagebox.showwarning("提示", "任务正在运行，请先暂停！")
-            return
-        self.tree.delete(*self.tree.get_children())
-        self.item_filepath_map.clear()
-        self.item_outpath_map.clear()
-        self.set_status("▤", "列表已清空。您可以点击按钮或直接拖拽文件进来。", "#6C757D", "#2C3E50")
-
-    # ================= 动态按钮与UI状态机 =================
-    def start_btn_animation(self):
-        if self.is_running and self._pause_event.is_set():
-            frames = ["⚙ 智能压缩中.  ", "⚙ 智能压缩中.. ", "⚙ 智能压缩中..."]
-            self.btn_start.config(text=frames[self.anim_idx % len(frames)])
-            self.anim_idx += 1
-            self.anim_job = self.parent.after(400, self.start_btn_animation)
-
-    def stop_btn_animation(self):
-        if self.anim_job is not None:
-            self.parent.after_cancel(self.anim_job)
-            self.anim_job = None
-
-    def update_button_ui(self, state):
-        color_start_active = "#1ABC9C"
-        color_pause_active = "#F39C12"
-        color_stop_active = "#DC3545"
-        color_disabled_bg = "#E9ECEF"
-        color_disabled_fg = "#ADB5BD"
-        color_enabled_gray_bg = "#E0E0E0"
-        color_enabled_gray_fg = "#333333"
-
-        self.stop_btn_animation()
-
-        if state == "idle":
-            self.btn_start.config(bg=color_start_active, fg="white", text="▶ 开始智能压缩", state=tk.NORMAL,
-                                  command=self.start_compression_thread)
-            self.btn_pause.config(bg=color_disabled_bg, fg=color_disabled_fg, text="❚❚ 暂停", state=tk.DISABLED)
-            self.btn_cancel.config(bg=color_disabled_bg, fg=color_disabled_fg, text="■ 停止", state=tk.DISABLED)
-
-        elif state == "running":
-            self.btn_start.config(bg=color_start_active, fg="white", state=tk.NORMAL, command=lambda: None)
-            self.btn_pause.config(bg=color_enabled_gray_bg, fg=color_enabled_gray_fg, text="❚❚ 暂停", state=tk.NORMAL,
-                                  command=self.toggle_pause)
-            self.btn_cancel.config(bg=color_enabled_gray_bg, fg=color_enabled_gray_fg, text="■ 停止", state=tk.NORMAL,
-                                   command=self.cancel_processing)
-            self.start_btn_animation()
-
-        elif state == "paused":
-            self.btn_start.config(bg=color_enabled_gray_bg, fg="#888888", text="⚙ 已挂起", state=tk.NORMAL,
-                                  command=lambda: None)
-            self.btn_pause.config(bg=color_pause_active, fg="white", text="▶ 继续压缩", state=tk.NORMAL,
-                                  command=self.toggle_pause)
-            self.btn_cancel.config(bg=color_enabled_gray_bg, fg=color_enabled_gray_fg, text="■ 停止", state=tk.NORMAL,
-                                   command=self.cancel_processing)
-
-        elif state == "stopping":
-            self.btn_start.config(bg=color_disabled_bg, fg=color_disabled_fg, text="■ 正在中止...", state=tk.DISABLED)
-            self.btn_pause.config(bg=color_disabled_bg, fg=color_disabled_fg, text="❚❚ 暂停", state=tk.DISABLED)
-            self.btn_cancel.config(bg=color_stop_active, fg="white", text="■ 正在停止...", state=tk.NORMAL,
-                                   command=lambda: None)
-
-    # ================= 辅助交互响应 =================
-    def show_context_menu(self, event):
-        iid = self.tree.identify_row(event.y)
-        if iid:
-            if iid not in self.tree.selection():
-                self.tree.selection_set(iid)
-            self.context_menu.tk_popup(event.x_root, event.y_root)
-
-    def delete_selected_items(self, event=None):
-        if self.is_running and not self._pause_event.is_set():
-            messagebox.showwarning("提示", "任务正在运行中，请先暂停后再执行删除操作！")
-            return
-        selected_items = self.tree.selection()
-        if not selected_items: return
-
-        for item_id in selected_items:
-            self.tree.delete(item_id)
-            if item_id in self.item_filepath_map: del self.item_filepath_map[item_id]
-            if item_id in self.item_outpath_map: del self.item_outpath_map[item_id]
-
-        for idx, item_id in enumerate(self.tree.get_children(), 1):
-            vals = list(self.tree.item(item_id, "values"))
-            vals[0] = idx
-            self.tree.item(item_id, values=vals)
-
-        self.set_status("✖", f"已剔除选中图片。当前列表剩余 {len(self.tree.get_children())} 张。", "#6C757D", "#2C3E50")
-
-    def on_tree_double_click(self, event):
-        selected_items = self.tree.selection()
-        if not selected_items: return
-        item_id = selected_items[0]
-        out_path = self.item_outpath_map.get(item_id)
-
-        if not out_path or not os.path.exists(out_path):
-            out_path = self.item_filepath_map.get(item_id)
-
-        if out_path and os.path.exists(out_path):
-            try:
-                os.startfile(out_path)
-            except Exception as e:
-                messagebox.showerror("错误", f"无法打开文件:\n{str(e)}")
-
-    def select_target(self):
-        path = filedialog.askdirectory(title="选择保存目录")
-        if path: self.target_var.set(path)
-
-    def open_output_dir(self):
-        tgt = self.target_var.get().strip()
-        if os.path.exists(tgt): os.startfile(tgt)
-
-    def toggle_pause(self):
-        if self._pause_event.is_set():
-            self._pause_event.clear()
-            self.update_button_ui("paused")
-            self.set_status("❚❚", "任务已挂起，您可以随时删除待办列表中的图片...", "#D35400")
-        else:
-            self._pause_event.set()
-            self.update_button_ui("running")
-            self.set_status("▶", "任务已恢复，正在全力压缩...", "#0078D7")
-
-    def cancel_processing(self):
-        if messagebox.askyesno("确认停止", "确定要中止当前的压缩任务吗？\n已压缩完成的图片将被保留。"):
-            self._stop_event.set()
-            self._pause_event.set()
-            self.update_button_ui("stopping")
-            self.set_status("■", "正在安全停止任务...", "#DC3545")
-
-    def format_size(self, size_bytes):
-        if size_bytes < 1024:
-            return f"{size_bytes} B"
-        elif size_bytes < 1024 * 1024:
-            return f"{size_bytes / 1024:.1f} KB"
-        else:
-            return f"{size_bytes / (1024 * 1024):.2f} MB"
-
-    def update_tree_row(self, item_id, values, tag, auto_scroll=True):
-        def update():
-            if self.tree.exists(item_id):
-                self.tree.item(item_id, values=values, tags=(tag,))
-                if auto_scroll: self.tree.see(item_id)
-
-        self.parent.after(0, update)
-
-    def start_compression_thread(self):
+    def start_conversion_thread(self):
         out_mode = self.out_mode_var.get()
         tgt = self.target_var.get().strip().strip('"').strip("'")
         keep_format = self.keep_format_var.get()
@@ -429,7 +225,8 @@ class ImageCompressUI:
         q_str = raw_q.split(' ')[0]
         try:
             q_value = int(q_str)
-            if not (1 <= q_value <= 100): raise ValueError
+            if not (1 <= q_value <= 100):
+                raise ValueError
         except ValueError:
             messagebox.showwarning("参数错误", "请输入有效的压缩质量数值(1-100)！")
             return
@@ -465,14 +262,15 @@ class ImageCompressUI:
         self.is_running = True
 
         self.update_button_ui("running")
-        if out_mode == "new_dir": self.btn_open_dir.config(state=tk.DISABLED)
+        if out_mode == "new_dir":
+            self.btn_open_dir.config(state=tk.DISABLED)
 
         self.set_status("⚙", f"开始执行，队列中共有 {len(pending_items)} 张图片...", "#0078D7")
 
         threading.Thread(target=self.process_compression, args=(pending_items, tgt, q_value, out_mode, keep_format),
                          daemon=True).start()
 
-    # ================= 核心压缩与 【工业级安全覆盖算法】 =================
+    # ================= 核心压缩与安全覆盖算法 =================
     def process_compression(self, pending_items, tgt, q_value, out_mode, keep_format):
         success_count = 0
         error_count = 0
@@ -480,10 +278,12 @@ class ImageCompressUI:
 
         try:
             for item_id in pending_items:
-                if self._stop_event.is_set(): break
+                if self._stop_event.is_set():
+                    break
                 self._pause_event.wait()
 
-                if not self.tree.exists(item_id) or item_id not in self.item_filepath_map: continue
+                if not self.tree.exists(item_id) or item_id not in self.item_filepath_map:
+                    continue
 
                 file_path = self.item_filepath_map[item_id]
                 file_name = os.path.basename(file_path)
@@ -496,7 +296,7 @@ class ImageCompressUI:
                     error_count += 1
                     continue
 
-                self.update_tree_row(item_id, (idx, file_name, self.format_size(orig_size), "-", "-", "⚙ 处理中..."), "processing")
+                self.update_tree_row(item_id, (idx, file_name, format_size(orig_size), "-", "-", "⚙ 处理中..."), "processing")
 
                 temp_path = ""
                 converted_img_obj = None  # 用于跟踪需要手动关闭的 Image 对象
@@ -505,25 +305,18 @@ class ImageCompressUI:
                     orig_ext = os.path.splitext(file_name)[1].lower()
                     base_name = os.path.splitext(file_name)[0]
 
-                    # 【升级版】智能目录结构继承逻辑
+                    # 目录结构继承逻辑
                     if out_mode == "new_dir":
-                        # 1. 动态提取源文件的父文件夹名称 (例如 "1_115075_吴汝超")
                         parent_folder_name = os.path.basename(os.path.dirname(file_path))
-
-                        # 2. 边缘防御：防止用户直接拖拽磁盘根目录的图片导致解析为空
                         if not parent_folder_name:
                             parent_folder_name = "未分类图片"
-
-                        # 3. 拼接生成专属的子目录路径
                         current_out_dir = os.path.join(tgt, parent_folder_name)
-
-                        # 4. 动态创建子目录
                         if not os.path.exists(current_out_dir):
                             os.makedirs(current_out_dir)
                     else:
                         current_out_dir = os.path.dirname(file_path)  # 原位覆盖模式保持不变
 
-                    # 【修复 1】使用 UUID4 确保零碰撞，彻底避免并发临时文件冲突
+                    # 使用 UUID4 确保零碰撞，避免并发临时文件冲突
                     out_ext = orig_ext
                     temp_filename = f"~tmp_{uuid.uuid4().hex}.tmp"
                     temp_path = os.path.join(current_out_dir, temp_filename)
@@ -557,7 +350,7 @@ class ImageCompressUI:
 
                     new_size = os.path.getsize(temp_path)
 
-                    # 【修复 2】防损坏验证：确保压缩出来的文件大于 0 字节，且能被正常读取
+                    # 防损坏验证：确保压缩出来的文件大于 0 字节，且能被正常读取
                     is_valid_output = False
                     if 0 < new_size < orig_size:
                         try:
@@ -572,31 +365,28 @@ class ImageCompressUI:
                         ratio = (saved_bytes / orig_size) * 100
                         total_saved_bytes += saved_bytes
 
-                        # 【修复 3】事务级的文件替换，确保数据绝对不丢失
+                        # 事务级的文件替换，确保数据不丢失
                         if out_mode == "overwrite":
                             final_path = os.path.join(current_out_dir, base_name + out_ext)
                             is_format_changed = os.path.abspath(file_path) != os.path.abspath(final_path)
 
-                            # 方案：直接使用 os.replace 实现系统级原子替换 / shutil.move 兜底跨盘符
                             try:
-                                # 先将新文件落位
                                 shutil.move(temp_path, final_path)
-                                # 如果是格式强转 (例如 png -> jpg)，落位成功后，再安全删除旧的 png
                                 if is_format_changed and os.path.exists(file_path):
                                     os.remove(file_path)
                             except Exception as move_err:
                                 raise Exception(f"文件写入失败, 原文件已安全保留: {str(move_err)}")
 
                             self.item_outpath_map[item_id] = final_path
-                            self.update_tree_row(item_id, (idx, file_name, self.format_size(orig_size),
-                                                           self.format_size(new_size), f"↓ {ratio:.1f}%",
+                            self.update_tree_row(item_id, (idx, file_name, format_size(orig_size),
+                                                           format_size(new_size), f"↓ {ratio:.1f}%",
                                                            "✔ 原位覆盖成功"), "success")
                         else:
                             final_path = os.path.join(current_out_dir, f"{base_name}_min{out_ext}")
-                            shutil.move(temp_path, final_path)  # shutil.move 自动处理跨盘符和覆盖
+                            shutil.move(temp_path, final_path)
                             self.item_outpath_map[item_id] = final_path
-                            self.update_tree_row(item_id, (idx, file_name, self.format_size(orig_size),
-                                                           self.format_size(new_size), f"↓ {ratio:.1f}%",
+                            self.update_tree_row(item_id, (idx, file_name, format_size(orig_size),
+                                                           format_size(new_size), f"↓ {ratio:.1f}%",
                                                            "✔ 另存压缩成功"), "success")
 
                         temp_path = ""
@@ -609,37 +399,35 @@ class ImageCompressUI:
 
                         if out_mode == "overwrite":
                             self.item_outpath_map[item_id] = file_path
-                            self.update_tree_row(item_id, (idx, file_name, self.format_size(orig_size),
-                                                           self.format_size(orig_size), "0.0%", "✨ 跳过 (原图最优)"), "skipped")
+                            self.update_tree_row(item_id, (idx, file_name, format_size(orig_size),
+                                                           format_size(orig_size), "0.0%", "✨ 跳过 (原图最优)"), "skipped")
                         else:
                             final_path = os.path.join(current_out_dir, f"{base_name}_min{orig_ext}")
-                            # 同样使用覆盖级别的复制
                             shutil.copy2(file_path, final_path)
                             self.item_outpath_map[item_id] = final_path
-                            self.update_tree_row(item_id, (idx, file_name, self.format_size(orig_size),
-                                                           self.format_size(orig_size), "0.0%", "✨ 复制 (原图最优)"), "skipped")
+                            self.update_tree_row(item_id, (idx, file_name, format_size(orig_size),
+                                                           format_size(orig_size), "0.0%", "✨ 复制 (原图最优)"), "skipped")
                         success_count += 1
 
                 except UnidentifiedImageError:
-                    self.update_tree_row(item_id, (idx, file_name, self.format_size(orig_size), "N/A", "N/A", "✖ 图片损坏或不支持"), "error")
+                    self.update_tree_row(item_id, (idx, file_name, format_size(orig_size), "N/A", "N/A", "✖ 图片损坏或不支持"), "error")
                     error_count += 1
                 except PermissionError:
-                    self.update_tree_row(item_id, (idx, file_name, self.format_size(orig_size), "N/A", "N/A", "✖ 无权限或被占用"), "error")
+                    self.update_tree_row(item_id, (idx, file_name, format_size(orig_size), "N/A", "N/A", "✖ 无权限或被占用"), "error")
                     error_count += 1
                 except Exception as e:
-                    self.update_tree_row(item_id, (idx, file_name, self.format_size(orig_size), "N/A", "N/A", f"✖ 异常: {str(e)[:15]}"), "error")
+                    self.update_tree_row(item_id, (idx, file_name, format_size(orig_size), "N/A", "N/A", f"✖ 异常: {str(e)[:15]}"), "error")
                     error_count += 1
                 finally:
-                    # 绝对防漏清理机制
+                    # 防漏清理机制
                     if temp_path and os.path.exists(temp_path):
                         try:
                             os.remove(temp_path)
                         except:
                             pass
-                    # 【休眠控制】缓解 UI 事件队列雪崩，平滑渲染 GUI (给 Tkinter 喘息时间)
+                    # 缓解 UI 事件队列雪崩，平滑渲染 GUI
                     time.sleep(0.01)
 
-            # --- 以下保留原有结束处理 ---
             if self._stop_event.is_set():
                 for item_id in pending_items:
                     if self.tree.exists(item_id):
@@ -657,7 +445,7 @@ class ImageCompressUI:
                 if self._stop_event.is_set():
                     self.set_status("■", "任务已中断。", "#DC3545")
                 else:
-                    self.set_status("✔", f"处理完成！成功 {success_count} 张，失败 {error_count} 张。共节省 {self.format_size(total_saved_bytes)}！", "#198754")
+                    self.set_status("✔", f"处理完成！成功 {success_count} 张，失败 {error_count} 张。共节省 {format_size(total_saved_bytes)}！", "#198754")
 
             self.parent.after(0, finish_ui)
 
@@ -665,4 +453,3 @@ class ImageCompressUI:
             self.parent.after(0, lambda e=str(global_e): self.set_status("✖", f"发生全局严重错误: {e}", "#DC3545"))
             self.parent.after(0, lambda: self.update_button_ui("idle"))
             self.parent.after(0, self.toggle_output_state)
-

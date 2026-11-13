@@ -6,8 +6,10 @@ import tkinter as tk
 import logging
 from tkinter import filedialog, messagebox, scrolledtext
 
-# 【全局断路器】：强行瘫痪整个 Python 进程中所有 INFO 及以下级别的标准日志输出
-logging.disable(logging.INFO)
+from utils.ui_base import BaseEngineUI
+
+# 【局部静音】：仅静音 pdf2docx 库自身的 INFO 及以下日志，避免影响整个进程的其他模块
+logging.getLogger("pdf2docx").setLevel(logging.WARNING)
 # 顺手把 PyMuPDF (fitz) 底层的 C++ 警告也物理静音
 os.environ["FITZ_LOG"] = "0"
 
@@ -17,16 +19,11 @@ except ImportError:
     Converter = None
 
 
-class PDFToWordUI:
+class PDFToWordUI(BaseEngineUI):
     """企业级 PDF 转 Word 智能转换引擎 (防覆盖保护 + 异步扫盘 + 状态机管控)"""
 
     def __init__(self, parent_frame):
-        self.parent = parent_frame
-
-        # 线程控制事件
-        self._stop_event = threading.Event()
-        self._pause_event = threading.Event()
-        self._pause_event.set()
+        super().__init__(parent_frame)
 
         # UI 变量
         self.source_var = tk.StringVar()

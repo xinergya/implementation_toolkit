@@ -5,25 +5,24 @@ import threading
 import datetime
 import hashlib
 import json
+import logging
 import pandas as pd
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext
 from thefuzz import fuzz
 
+from utils.ui_base import BaseEngineUI
+from utils.pathutil import strip_quotes
+
 # ================= 全局常量配置 =================
 VALID_EXTENSIONS = {'.pdf', '.jpg', '.jpeg', '.png', '.gif', '.jfif', '.bmp', '.heic'}
 DEFAULT_KEYWORDS = "证书, 毕业, 学位, 技能, 资质, 身份, 高级, 中级, 学信网, 学历"
 
-class AutoFileProcessorUI:
+class AutoFileProcessorUI(BaseEngineUI):
     """文件智能匹配分发工具（V3.0 极速 Hash 引擎与精简报表版）"""
 
     def __init__(self, parent_frame):
-        self.parent = parent_frame
-
-        # 线程控制事件
-        self._stop_event = threading.Event()
-        self._pause_event = threading.Event()
-        self._pause_event.set()
+        super().__init__(parent_frame)
 
         self.link_counter = 0
         self.current_keywords = DEFAULT_KEYWORDS  # 修复 1：彻底移除 load_config
@@ -175,9 +174,9 @@ class AutoFileProcessorUI:
             self.btn_cancel.config(state=tk.DISABLED)
 
     def start_processing(self):
-        excel_path = self.excel_var.get().strip().strip('"').strip("'")
-        source_dir = self.source_var.get().strip().strip('"').strip("'")
-        target_dir = self.target_var.get().strip().strip('"').strip("'")
+        excel_path = strip_quotes(self.excel_var.get())
+        source_dir = strip_quotes(self.source_var.get())
+        target_dir = strip_quotes(self.target_var.get())
         raw_keywords = self.keyword_var.get().strip()
         match_mode = self.match_mode_var.get()
 
@@ -240,7 +239,8 @@ class AutoFileProcessorUI:
                 for chunk in iter(lambda: f.read(4096), b""):
                     hasher.update(chunk)
             return hasher.hexdigest()
-        except Exception:
+        except Exception as exc:
+            logging.warning("计算文件 MD5 失败（%s）：%s", filepath, exc)
             return None
 
     def _check_keywords(self, clean_filename, keywords_list):
@@ -253,6 +253,33 @@ class AutoFileProcessorUI:
             if clean_kw in clean_filename or fuzz.partial_ratio(clean_kw, clean_filename) >= 80:
                 return True
         return False
+
+    @staticmethod
+    def _is_word_char(ch):
+        """判断字符是否属于「词内字符」（字母/数字/汉字），用于边界感知匹配。"""
+        return ch.isalnum()
+
+    def _boundary_match(self, token, text):
+        """边界感知匹配：token 须作为独立片段出现，前后不能紧邻字母/数字/汉字。
+
+        用于避免姓名/工号作为子串误命中（如「张三」误匹配「张三丰」）。
+        对「张三的证书」这类姓名后紧跟汉字的命名可能漏配，但严格模式(AND)下有工号兜底。
+        """
+        if not token:
+            return False
+        text = str(text).lower()
+        token = token.lower()
+        start = 0
+        while True:
+            idx = text.find(token, start)
+            if idx == -1:
+                return False
+            prev_ok = idx == 0 or not self._is_word_char(text[idx - 1])
+            next_idx = idx + len(token)
+            next_ok = next_idx >= len(text) or not self._is_word_char(text[next_idx])
+            if prev_ok and next_ok:
+                return True
+            start = idx + 1
 
     # ================= 主工作流 =================
     def process_data(self, excel_path, source_dir, target_dir, keywords_list, match_mode):
@@ -302,11 +329,16 @@ class AutoFileProcessorUI:
                 clean_name = self._clean_feature_string(emp_name)
 
                 # 初始化员工对象
+                folder_name = f"{xuhao} {self._clean_filename(emp_id)} {self._clean_filename(emp_name)}"
+                # 截断过长文件夹名，避免超出 Windows 路径长度限制（MAX_PATH 260）
+                if len(folder_name) > 120:
+                    folder_name = folder_name[:120].rstrip()
+
                 employees[index] = {
                     "emp_id": emp_id,
                     "emp_name": emp_name,
                     "matched_files": [],  # 预留匹配队列
-                    "folder_name": f"{xuhao} {self._clean_filename(emp_id)} {self._clean_filename(emp_name)}"
+                    "folder_name": folder_name
                 }
 
                 # 挂载 Hash 节点
@@ -330,11 +362,11 @@ class AutoFileProcessorUI:
                     fpath = os.path.join(root_dir, file_name)
                     clean_fname = self._clean_feature_string(file_name)
 
-                    # 【性能爆点 1】前置校验：如果文件不是目标资产（证书/资质等），直接抛弃
+                    # 前置校验：如果文件不是目标资产（证书/资质等），直接抛弃
                     if not self._check_keywords(clean_fname, keywords_list):
                         continue
 
-                    # 【性能爆点 2】提取潜在特征并触发 Hash 寻址
+                    # 提取潜在特征并触发 Hash 寻址
                     # 工号检索：提取文件名中的连续数字/字母串，去 id_map 中 O(1) 瞬间定位
                     # 维度 A：直接从原始文件名提取，保留天然边界（解决 98-110011 连字符合并问题）
                     # 【核心修复】：直接从原始 file_name 提取特征，保留连字符和空格的阻断作用！
@@ -348,10 +380,10 @@ class AutoFileProcessorUI:
                         if pid in id_map:
                             matched_by_id.update(id_map[pid])
 
-                    # 姓名检索：调用底层 C 实现的字符串包含检测
+                    # 姓名检索：边界感知匹配，避免姓名作为子串误命中（如「张三」误匹配「张三丰」）
                     matched_by_name = set()
                     for cname, indices in name_map.items():
-                        if cname in clean_fname:
+                        if self._boundary_match(cname, file_name):
                             matched_by_name.update(indices)
 
                     # 执行鉴权策略：将文件分发给对应的候选员工
@@ -414,7 +446,7 @@ class AutoFileProcessorUI:
             df_result = df[actual_columns]
             strategy_name = "严格模式" if match_mode == "AND" else "宽松模式"
             result_excel_name = f"分发结果报表_{strategy_name}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-            result_excel_path = os.path.join(os.path.dirname(excel_path), result_excel_name)
+            result_excel_path = os.path.join(target_dir, result_excel_name)
 
             try:
                 df_result.to_excel(result_excel_path, index=False)
