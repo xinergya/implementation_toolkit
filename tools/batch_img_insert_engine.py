@@ -1,11 +1,7 @@
 import os
-import re
-import io
-import json
 import threading
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
-from collections import OrderedDict
 import pandas as pd
 import openpyxl
 from datetime import datetime
@@ -15,193 +11,23 @@ from docxcompose.composer import Composer
 from docx.shared import Cm
 
 from utils.ui_base import BaseEngineUI
-
-
-# ==========================================
-# 图片类型配置（动态可扩展）
-# ==========================================
-def _get_config_path():
-    """图片类型配置文件路径（优先 %APPDATA%，回退脚本目录）。"""
-    appdata = os.environ.get("APPDATA")
-    if appdata:
-        return os.path.join(appdata, "EfficiencyToolbox", "img_type_config.json")
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "img_type_config.json")
-
-
-# 默认类型示例：keywords 为空表示「兜底类型」，接受该目录下未被其他类型匹配的图片
-DEFAULT_IMAGE_TYPES = [
-    {"name": "身份证", "dir": "", "keywords": "身份证"},
-    {"name": "学历证书", "dir": "", "keywords": "毕业,学位,学士"},
-    {"name": "资质证书", "dir": "", "keywords": ""},
-    {"name": "社保证明", "dir": "", "keywords": ""},
-]
-
-
-def load_image_types():
-    """加载图片类型配置；文件缺失或解析失败时回退默认类型。兼容旧配置（无 keywords 字段）。"""
-    try:
-        with open(_get_config_path(), 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        types = data.get("image_types", [])
-        if types:
-            result = []
-            for t in types:
-                result.append({
-                    "name": str(t.get("name", "")),
-                    "dir": str(t.get("dir", "")),
-                    "keywords": str(t.get("keywords", "")),
-                })
-            return result
-    except Exception:
-        pass
-    return [dict(t) for t in DEFAULT_IMAGE_TYPES]
-
-
-def save_image_types(types):
-    """保存图片类型配置（名称 + 目录 + 识别关键词）。"""
-    try:
-        path = _get_config_path()
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, 'w', encoding='utf-8') as f:
-            json.dump({"image_types": types}, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        print(f"保存图片类型配置失败：{e}")
-
-
-def extract_template_variables(template_path):
-    """扫描 Word 模板，提取所有 {{变量}} 占位符变量名。"""
-    variables = set()
-    if not template_path or not os.path.exists(template_path):
-        return variables
-    try:
-        doc = Document(template_path)
-        paras = list(doc.paragraphs)
-        for table in doc.tables:
-            for row in table.rows:
-                for cell in row.cells:
-                    paras.extend(cell.paragraphs)
-        pattern = re.compile(r'{{\s*([A-Za-z0-9_\u4e00-\u9fa5]+)\s*}}')
-        for para in paras:
-            for m in pattern.finditer(para.text):
-                variables.add(m.group(1))
-    except Exception:
-        pass
-    return variables
-
-
-def parse_keywords(keywords_str):
-    """把逗号分隔的关键词字符串解析为列表（去空、去重）。"""
-    seen = []
-    for k in (keywords_str or "").replace('，', ',').split(','):
-        k = k.strip()
-        if k and k not in seen:
-            seen.append(k)
-    return seen
-
-
-def match_keywords(img_path, keywords):
-    """判断图片文件名是否含任一关键词（不区分大小写）。"""
-    fname = os.path.basename(img_path).lower()
-    return any(kw.lower() in fname for kw in keywords)
+from utils.image_types import (
+    load_image_types, save_image_types, parse_keywords, match_keywords,
+    extract_template_variables, find_person_images, match_types_for_person,
+    prepare_image, get_excel_columns, identify_image_type_variables,
+)
 
 
 # ==========================================
 # 1. 核心处理引擎类 (Engine)
 # ==========================================
 class BatchImageInsertEngine:
-    VALID_EXTS = ('.jpg', '.jpeg', '.png', '.bmp', '.jfif', '.gif')
-
     def __init__(self, excel_path, template_path, image_types, output_dir, log_callback=None):
         self.excel_path = excel_path
         self.template_path = template_path
         self.image_types = [t for t in image_types if t.get("name")]
         self.output_dir = output_dir
         self.log = log_callback if log_callback else (lambda msg, level="INFO", **kwargs: print(f"[{level}] {msg}"))
-
-    def find_person_images(self, name, emp_id, search_dir):
-        """查找某人员的所有候选图片，兼容「分人子目录」与「平铺」两种结构。
-
-        1. 若 search_dir 下存在以姓名/工号命名的子文件夹，则收集这些子文件夹内的全部图片；
-        2. 否则视为平铺目录，收集文件名含姓名/工号的图片。
-        """
-        images = []
-        if not search_dir or not os.path.exists(search_dir):
-            return images
-        try:
-            entries = os.listdir(search_dir)
-        except Exception:
-            return images
-
-        # 1. 分人子目录模式
-        matched_subdirs = []
-        for entry in entries:
-            full = os.path.join(search_dir, entry)
-            if os.path.isdir(full) and (name in entry or (emp_id and emp_id in entry)):
-                matched_subdirs.append(full)
-        if matched_subdirs:
-            for sd in matched_subdirs:
-                for root, dirs, files in os.walk(sd):
-                    for f in files:
-                        if f.lower().endswith(self.VALID_EXTS):
-                            images.append(os.path.join(root, f))
-            return images
-
-        # 2. 平铺模式
-        for f in entries:
-            if f.lower().endswith(self.VALID_EXTS) and (name in f or (emp_id and emp_id in f)):
-                images.append(os.path.join(search_dir, f))
-        return images
-
-    @staticmethod
-    def _prepare_image(img_path):
-        """用 Pillow 规范化图片为 python-docx 可识别的标准格式，返回 BytesIO。
-
-        解决三类问题：① 某些 JPEG 缺少 JFIF/Exif 头（文件头为 ffd8ffdb），python-docx
-        无法识别；② 源图为 WebP/HEIC 等 python-docx 不支持的格式；③ 按 EXIF 方向信息
-        转正图片，避免手机拍摄的照片在文档中横向/倒置摆放。转换失败返回 None。
-        """
-        try:
-            from PIL import Image, ImageOps
-            with Image.open(img_path) as im:
-                fmt = im.format
-                # 应用 EXIF 方向信息，把图片转正（无 EXIF 或已正向则原样返回）
-                im = ImageOps.exif_transpose(im)
-                buf = io.BytesIO()
-                has_alpha = im.mode in ('RGBA', 'LA', 'P')
-                if fmt == 'JPEG':
-                    im.convert('RGB').save(buf, format='JPEG', quality=92)
-                elif has_alpha:
-                    im.convert('RGBA').save(buf, format='PNG')
-                else:
-                    im.convert('RGB').save(buf, format='PNG')
-                buf.seek(0)
-                return buf
-        except Exception:
-            return None
-
-    def _match_types_for_person(self, name, emp_id):
-        """对某人员，按目录分组执行「关键词优先 + 兜底」匹配，返回 {类型名: [图片路径]}。"""
-        dir_groups = OrderedDict()
-        for ti in self.image_types:
-            dir_groups.setdefault(ti["dir"], []).append(ti)
-
-        type_images = {}
-        for type_dir, types in dir_groups.items():
-            person_imgs = self.find_person_images(name, emp_id, type_dir)
-            used = set()
-            # 第一遍：有关键词的类型按文件名匹配
-            for ti in types:
-                kws = parse_keywords(ti.get("keywords", ""))
-                if kws:
-                    matched = [p for p in person_imgs if p not in used and match_keywords(p, kws)]
-                    type_images[ti["name"]] = matched
-                    used.update(matched)
-            # 第二遍：关键词为空的类型接受剩余图片（兜底）
-            remaining = [p for p in person_imgs if p not in used]
-            for ti in types:
-                if not parse_keywords(ti.get("keywords", "")):
-                    type_images[ti["name"]] = remaining
-        return type_images
 
     def execute(self):
         try:
@@ -242,7 +68,7 @@ class BatchImageInsertEngine:
                 tpl = DocxTemplate(self.template_path)
 
                 # 智能匹配：同一目录下按关键词区分类型，其余兜底
-                type_images = self._match_types_for_person(name, emp_id)
+                type_images = match_types_for_person(self.image_types, name, emp_id)
 
                 for type_info in self.image_types:
                     type_name = type_info["name"]
@@ -251,7 +77,7 @@ class BatchImageInsertEngine:
                         sub = tpl.new_subdoc()
                         inserted = 0
                         for img_path in imgs:
-                            buf = self._prepare_image(img_path)
+                            buf = prepare_image(img_path)
                             if buf:
                                 sub.add_paragraph().add_run().add_picture(buf, width=Cm(15))
                                 inserted += 1
@@ -455,11 +281,7 @@ class BatchImageInsertUI(BaseEngineUI):
         self._relayout_types()
 
     def _relayout_types(self):
-        """重新排列所有类型行的 grid 行号（从 1 起连续编号）。
-
-        删除中间行后若不重排，`len(type_rows)+1` 计算的新行号会与已占用的
-        空行冲突，导致新行覆盖最后一行。此方法保证行号始终连续。
-        """
+        """重新排列所有类型行的 grid 行号（从 1 起连续编号），避免删除后行号冲突。"""
         for idx, r in enumerate(self.type_rows, start=1):
             r["name_entry"].grid(row=idx, column=0)
             r["dir_entry"].grid(row=idx, column=1)
@@ -499,24 +321,30 @@ class BatchImageInsertUI(BaseEngineUI):
         self._persist_types()
 
     def _on_scan_template(self):
-        """扫描模板占位符，自动识别并新增图片类型（目录/关键词留空待填）。"""
+        """扫描模板占位符，智能识别图片类型（排除 Excel 文本字段 + 关键词过滤）。"""
         tpl_path = self.tpl_entry.get().strip()
         if not tpl_path or not os.path.exists(tpl_path):
             messagebox.showwarning("提示", "请先选择有效的 Word 模板！")
             return
         variables = extract_template_variables(tpl_path)
+        excel_path = self.excel_entry.get().strip()
+        excel_columns = get_excel_columns(excel_path) if excel_path else []
+        image_vars = identify_image_type_variables(variables, excel_columns)
         existing = {t["name"] for t in self._collect_types()}
         added = []
-        for v in sorted(variables):
+        for v in sorted(image_vars):
             if v and v not in existing:
                 self._add_type_row(name=v)
                 existing.add(v)
                 added.append(v)
         if added:
             self._persist_types()
-            self.log_to_ui(f"  └─ 从模板识别并新增 {len(added)} 个图片类型: {', '.join(added)}（请补充目录与关键词）", "SUCCESS")
+            hint = "（请补充目录与关键词）"
+            if not excel_path:
+                hint += "；建议先选择 Excel 清单以更精确排除文本字段"
+            self.log_to_ui(f"  └─ 智能识别并新增 {len(added)} 个图片类型: {', '.join(added)}{hint}", "SUCCESS")
         else:
-            self.log_to_ui("  └─ 模板中未发现新的图片类型占位符", "INFO")
+            self.log_to_ui("  └─ 未识别到新的图片类型占位符（文本字段已自动排除）", "INFO")
 
     # ---------- 文件选择与调度 ----------
     def select_excel(self):

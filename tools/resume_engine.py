@@ -17,6 +17,12 @@ from docxcompose.composer import Composer
 # 引入抽离出来的公共工具 (请确保你的 utils 目录结构正确)
 from utils.formatters import filter_date, filter_num, parse_dynamic_list
 from utils.ui_base import BaseEngineUI
+from utils.image_types import (
+    load_image_types, save_image_types, extract_template_variables,
+    match_types_for_person, prepare_image,
+    get_excel_columns, identify_image_type_variables,
+)
+from docx.shared import Cm
 
 
 class ResumeGeneratorUI(BaseEngineUI):
@@ -34,7 +40,11 @@ class ResumeGeneratorUI(BaseEngineUI):
         self.anim_frame = 0
         self.spinner_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
+        # 图片类型动态列表
+        self.type_rows = []
+
         self.setup_ui()
+        self._load_configured_types()
 
     # ================= 1. UI 构建与布局 =================
     def setup_ui(self):
@@ -42,7 +52,7 @@ class ResumeGeneratorUI(BaseEngineUI):
         frame.pack(fill=tk.BOTH, expand=True)
 
         frame.columnconfigure(1, weight=1)
-        frame.rowconfigure(5, weight=1)
+        frame.rowconfigure(6, weight=1)
 
         # 路径选择区
         tk.Label(frame, text="1. Word 简历模板:", font=("Microsoft YaHei UI", 10, "bold")).grid(row=0, column=0, sticky=tk.W, pady=5)
@@ -60,9 +70,28 @@ class ResumeGeneratorUI(BaseEngineUI):
         self.entry_out.grid(row=2, column=1, padx=10, pady=5, sticky=tk.EW, ipady=3)
         tk.Button(frame, text="浏览目录...", command=self.browse_out, width=12).grid(row=2, column=2, pady=5)
 
+        # 图片类型配置（可选：身份证/学历证书/社保等，动态增删，模板用 {{类型名}} 占位）
+        types_outer = tk.LabelFrame(frame, text=" 图片类型配置（可选，留空则简历不含图片） ",
+                                    font=("Microsoft YaHei UI", 10), bg="#FFFFFF")
+        types_outer.grid(row=3, column=0, columnspan=3, pady=5, sticky=tk.EW)
+        types_outer.columnconfigure(0, weight=1)
+
+        type_btn_row = tk.Frame(types_outer, bg="#FFFFFF")
+        type_btn_row.grid(row=0, column=0, sticky=tk.W, padx=8, pady=(6, 2))
+        tk.Button(type_btn_row, text="➕ 添加图片类型", command=self._on_add_type).pack(side=tk.LEFT, padx=(0, 8))
+        tk.Button(type_btn_row, text="📄 从模板识别类型", command=self._on_scan_template).pack(side=tk.LEFT)
+
+        self.types_frame = tk.Frame(types_outer, bg="#FFFFFF")
+        self.types_frame.grid(row=1, column=0, sticky=tk.EW, padx=8, pady=(2, 8))
+        self.types_frame.columnconfigure(1, weight=1)
+
+        tk.Label(self.types_frame, text="类型名称", font=("Microsoft YaHei UI", 9, "bold"), bg="#FFFFFF").grid(row=0, column=0, padx=(0, 5), sticky=tk.W)
+        tk.Label(self.types_frame, text="图片目录", font=("Microsoft YaHei UI", 9, "bold"), bg="#FFFFFF").grid(row=0, column=1, padx=(0, 5), sticky=tk.W)
+        tk.Label(self.types_frame, text="识别关键词(逗号分隔,留空=其余图片)", font=("Microsoft YaHei UI", 9, "bold"), bg="#FFFFFF").grid(row=0, column=2, padx=(0, 5), sticky=tk.W)
+
         # 控制按钮区
         btn_frame = tk.Frame(frame)
-        btn_frame.grid(row=3, column=0, columnspan=3, pady=20, sticky=tk.EW)
+        btn_frame.grid(row=4, column=0, columnspan=3, pady=20, sticky=tk.EW)
         btn_frame.columnconfigure((0, 1), weight=1)
 
         self.btn_generate = tk.Button(btn_frame, font=("Microsoft YaHei UI", 11, "bold"))
@@ -72,12 +101,12 @@ class ResumeGeneratorUI(BaseEngineUI):
         self.btn_cancel.grid(row=0, column=1, padx=10, sticky=tk.EW, ipady=5)
 
         # 日志区
-        tk.Label(frame, text="运行追踪与日志:", font=("Microsoft YaHei UI", 10, "bold"), fg="#333333").grid(row=4, column=0, sticky=tk.W, pady=(10, 5))
+        tk.Label(frame, text="运行追踪与日志:", font=("Microsoft YaHei UI", 10, "bold"), fg="#333333").grid(row=5, column=0, sticky=tk.W, pady=(10, 5))
 
         self.log_text = scrolledtext.ScrolledText(
             frame, font=("Microsoft YaHei UI", 10), bg="#F8F9FA", fg="#2C3E50", padx=12, pady=12, relief=tk.FLAT, state='disabled'
         )
-        self.log_text.grid(row=5, column=0, columnspan=3, pady=5, sticky=tk.NSEW)
+        self.log_text.grid(row=6, column=0, columnspan=3, pady=5, sticky=tk.NSEW)
 
         # 富文本标签样式
         self.log_text.tag_config("INFO", foreground="#2C3E50")
@@ -93,6 +122,112 @@ class ResumeGeneratorUI(BaseEngineUI):
 
         self.log_to_ui("✨ 简历批量生成与无缝合并引擎已就绪！", "HIGHLIGHT")
         self.update_button_ui("idle")
+
+    # ================= 图片类型动态增删 =================
+    def _add_type_row(self, name="", dir="", keywords=""):
+        row_idx = len(self.type_rows) + 1
+        name_var = tk.StringVar(value=name)
+        dir_var = tk.StringVar(value=dir)
+        kw_var = tk.StringVar(value=keywords)
+
+        name_entry = tk.Entry(self.types_frame, textvariable=name_var, width=12, font=("Microsoft YaHei UI", 10))
+        name_entry.grid(row=row_idx, column=0, padx=(0, 5), pady=2, sticky=tk.W)
+
+        dir_entry = tk.Entry(self.types_frame, textvariable=dir_var, font=("Microsoft YaHei UI", 10))
+        dir_entry.grid(row=row_idx, column=1, padx=(0, 5), pady=2, sticky=tk.EW)
+
+        kw_entry = tk.Entry(self.types_frame, textvariable=kw_var, width=22, font=("Microsoft YaHei UI", 10))
+        kw_entry.grid(row=row_idx, column=2, padx=(0, 5), pady=2, sticky=tk.EW)
+
+        browse_btn = tk.Button(self.types_frame, text="浏览", width=6, command=lambda v=dir_var: self._browse_dir(v))
+        browse_btn.grid(row=row_idx, column=3, padx=(0, 4), pady=2)
+
+        delete_btn = tk.Button(self.types_frame, text="✖", width=3)
+        delete_btn.grid(row=row_idx, column=4, pady=2)
+
+        row_data = {"name_var": name_var, "dir_var": dir_var, "kw_var": kw_var}
+        delete_btn.config(command=lambda r=row_data: self._on_remove_type(r))
+        row_data.update({
+            "name_entry": name_entry, "dir_entry": dir_entry, "kw_entry": kw_entry,
+            "browse_btn": browse_btn, "delete_btn": delete_btn, "row": row_idx,
+        })
+        self.type_rows.append(row_data)
+        return row_data
+
+    def _remove_type_row(self, row_data):
+        if row_data in self.type_rows:
+            self.type_rows.remove(row_data)
+        for w in ("name_entry", "dir_entry", "kw_entry", "browse_btn", "delete_btn"):
+            widget = row_data.get(w)
+            if widget is not None:
+                widget.destroy()
+        self._relayout_types()
+
+    def _relayout_types(self):
+        """删除类型行后重新连续编号 grid 行号，避免新行覆盖。"""
+        for idx, r in enumerate(self.type_rows, start=1):
+            r["name_entry"].grid(row=idx, column=0)
+            r["dir_entry"].grid(row=idx, column=1)
+            r["kw_entry"].grid(row=idx, column=2)
+            r["browse_btn"].grid(row=idx, column=3)
+            r["delete_btn"].grid(row=idx, column=4)
+            r["row"] = idx
+
+    def _collect_types(self):
+        types = []
+        for r in self.type_rows:
+            name = r["name_var"].get().strip()
+            dir_ = r["dir_var"].get().strip()
+            keywords = r["kw_var"].get().strip()
+            if name:
+                types.append({"name": name, "dir": dir_, "keywords": keywords})
+        return types
+
+    def _persist_types(self):
+        save_image_types(self._collect_types())
+
+    def _load_configured_types(self):
+        for t in load_image_types():
+            self._add_type_row(t["name"], t["dir"], t.get("keywords", ""))
+
+    def _browse_dir(self, dir_var):
+        path = filedialog.askdirectory(title="选择图片目录")
+        if path:
+            dir_var.set(path)
+
+    def _on_add_type(self):
+        self._add_type_row()
+        self._persist_types()
+
+    def _on_remove_type(self, row_data):
+        self._remove_type_row(row_data)
+        self._persist_types()
+
+    def _on_scan_template(self):
+        """扫描模板占位符，智能识别图片类型（排除 Excel 文本字段 + 关键词过滤）。"""
+        tpl_path = self.tpl_path_var.get().strip()
+        if not tpl_path or not os.path.exists(tpl_path):
+            messagebox.showwarning("提示", "请先选择有效的 Word 模板！")
+            return
+        variables = extract_template_variables(tpl_path)
+        excel_path = self.data_path_var.get().strip()
+        excel_columns = get_excel_columns(excel_path) if excel_path else []
+        image_vars = identify_image_type_variables(variables, excel_columns)
+        existing = {t["name"] for t in self._collect_types()}
+        added = []
+        for v in sorted(image_vars):
+            if v and v not in existing:
+                self._add_type_row(name=v)
+                existing.add(v)
+                added.append(v)
+        if added:
+            self._persist_types()
+            hint = "（请补充目录与关键词）"
+            if not excel_path:
+                hint += "；建议先选择 Excel 清单以更精确排除文本字段"
+            self.log_to_ui(f"  └─ 智能识别并新增 {len(added)} 个图片类型: {', '.join(added)}{hint}", "SUCCESS")
+        else:
+            self.log_to_ui("  └─ 未识别到新的图片类型占位符（文本字段已自动排除）", "INFO")
 
     # ================= 2. 交互流与状态机 =================
     def _animate_btn(self):
@@ -180,9 +315,16 @@ class ResumeGeneratorUI(BaseEngineUI):
             self.log_to_ui("🛑 收到阻断指令，正在安全停止任务...", "WARNING", auto_scroll=False)
 
     def is_file_locked(self, filepath):
-        if not os.path.exists(filepath): return False
+        """检测文件是否可读取。
+
+        原实现用 os.rename(file, file) 检测，会误判「可读但被共享/索引进程占用、
+        不可重命名」的文件为占用。改为直接尝试读取，与实际使用方式（只读）一致。
+        """
+        if not os.path.exists(filepath):
+            return False
         try:
-            os.rename(filepath, filepath)
+            with open(filepath, 'rb') as f:
+                f.read(1)
             return False
         except OSError:
             return True
@@ -224,7 +366,8 @@ class ResumeGeneratorUI(BaseEngineUI):
 
             # 阶段 2：使用系统级 TemporaryDirectory 作为防爆隔离沙箱
             with tempfile.TemporaryDirectory() as temp_dir:
-                generated_files = self._render_individual_resumes(df, tpl_path, temp_dir)
+                image_types = self._collect_types()
+                generated_files = self._render_individual_resumes(df, tpl_path, temp_dir, image_types)
 
                 if self._stop_event.is_set():
                     self.log_to_ui("🧹 已成功阻断，临时沙箱由系统自动销毁。", "SUCCESS")
@@ -287,7 +430,7 @@ class ResumeGeneratorUI(BaseEngineUI):
             return None
 
     # ================= 5. 子模块：高性能渲染引擎 =================
-    def _render_individual_resumes(self, df, tpl_path, temp_dir):
+    def _render_individual_resumes(self, df, tpl_path, temp_dir, image_types):
         self.log_to_ui("\n=== [阶段2] 渲染单人模板 (临时沙箱) ===", "HIGHLIGHT")
         generated_files = []
         error_list = []
@@ -305,6 +448,7 @@ class ResumeGeneratorUI(BaseEngineUI):
 
         # 【性能优化】：将高频使用的正则表达式提纯至循环外预编译
         clean_pattern = re.compile(r'^[0-9]+[、\.．\s]+|^[●■◆✔-]\s*')
+        emp_id_col = next((col for col in df.columns if any(k in col for k in ['工号', '编号', '员工编码'])), None)
 
         success_count = 0
         for index, row in df.iterrows():
@@ -328,6 +472,24 @@ class ResumeGeneratorUI(BaseEngineUI):
 
                 # 纯内存 IO 装载模板，防锁定防崩溃
                 doc = DocxTemplate(io.BytesIO(tpl_bytes))
+
+                # 图片类型注入（可选）：按关键词识别并插入图片，未匹配则渲染为空
+                if image_types:
+                    emp_id = str(row.get(emp_id_col, '')).strip() if emp_id_col else ''
+                    type_images = match_types_for_person(image_types, name, emp_id)
+                    for ti in image_types:
+                        type_name = ti["name"]
+                        imgs = type_images.get(type_name, [])
+                        if imgs:
+                            sub = doc.new_subdoc()
+                            for img_path in imgs:
+                                buf = prepare_image(img_path)
+                                if buf:
+                                    sub.add_paragraph().add_run().add_picture(buf, width=Cm(15))
+                            context[type_name] = sub
+                        else:
+                            context[type_name] = ""
+
                 doc.render(context, jinja_env=jinja_env)
 
                 safe_name = "".join(c for c in name if c not in r'\/:*?"<>|')

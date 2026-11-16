@@ -15,6 +15,7 @@ from tools.batch_img_insert_engine import (
     load_image_types, extract_template_variables, BatchImageInsertEngine,
     parse_keywords, match_keywords,
 )
+from utils.image_types import find_person_images, match_types_for_person
 
 
 class TestPathUtil(unittest.TestCase):
@@ -133,11 +134,10 @@ class TestBatchImageInsert(unittest.TestCase):
         os.makedirs(shebao)
         Image.new('RGB', (20, 20)).save(os.path.join(shebao, '孙方磊_1.jpg'))
 
-        engine = BatchImageInsertEngine('x', 't', [], 'out')
         # 分人子目录模式
-        self.assertEqual(len(engine.find_person_images('孙方磊', '118513', archive)), 4)
+        self.assertEqual(len(find_person_images('孙方磊', '118513', archive)), 4)
         # 平铺模式
-        self.assertEqual(len(engine.find_person_images('孙方磊', '', shebao)), 1)
+        self.assertEqual(len(find_person_images('孙方磊', '', shebao)), 1)
 
         types = [
             {'name': '身份证', 'dir': archive, 'keywords': '身份证'},
@@ -145,8 +145,7 @@ class TestBatchImageInsert(unittest.TestCase):
             {'name': '资质证书', 'dir': archive, 'keywords': ''},
             {'name': '社保证明', 'dir': shebao, 'keywords': ''},
         ]
-        engine2 = BatchImageInsertEngine('x', 't', types, 'out')
-        result = engine2._match_types_for_person('孙方磊', '118513')
+        result = match_types_for_person(types, '孙方磊', '118513')
         self.assertEqual(len(result['身份证']), 1)
         self.assertEqual(len(result['学历证书']), 2)
         self.assertEqual(len(result['资质证书']), 1)
