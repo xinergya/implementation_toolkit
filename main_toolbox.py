@@ -35,6 +35,7 @@ ENGINE_SPECS = [
     ("✂️ Word拆分神器", "tools.word_split_engine", "WordSplitUI"),
     ("🔄 PDF转Word", "tools.pdf_to_word_engine", "PDFToWordUI"),
     ("🔄 图片批量添加生成目录", "tools.batch_img_insert_engine", "BatchImageInsertUI"),
+    ("🧹 清除页眉页脚", "tools.remove_headers_footers_engine", "RemoveHeadersFootersUI"),
 ]
 
 
