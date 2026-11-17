@@ -52,7 +52,7 @@ class ResumeGeneratorUI(BaseEngineUI):
         frame.pack(fill=tk.BOTH, expand=True)
 
         frame.columnconfigure(1, weight=1)
-        frame.rowconfigure(6, weight=1)
+        frame.rowconfigure(7, weight=1)
 
         # 路径选择区
         tk.Label(frame, text="1. Word 简历模板:", font=("Microsoft YaHei UI", 10, "bold")).grid(row=0, column=0, sticky=tk.W, pady=5)
@@ -60,20 +60,23 @@ class ResumeGeneratorUI(BaseEngineUI):
         self.entry_tpl.grid(row=0, column=1, padx=10, pady=5, sticky=tk.EW, ipady=3)
         tk.Button(frame, text="选择模板...", command=self.browse_tpl, width=12).grid(row=0, column=2, pady=5)
 
-        tk.Label(frame, text="2. Excel 人员清单:", font=("Microsoft YaHei UI", 10, "bold")).grid(row=1, column=0, sticky=tk.W, pady=5)
-        self.entry_data = tk.Entry(frame, textvariable=self.data_path_var, font=("Microsoft YaHei UI", 10))
-        self.entry_data.grid(row=1, column=1, padx=10, pady=5, sticky=tk.EW, ipady=3)
-        tk.Button(frame, text="选择Excel...", command=self.browse_data, width=12).grid(row=1, column=2, pady=5)
+        tk.Label(frame, text="💡 模板表达式规则：用 {{变量名}} 引用 Excel 列或图片类型；变量名仅限中文/字母/数字/下划线，不能含括号、空格、标点。如「{{姓名}}」「{{身份证}}」正确，「{{身份证（正面）}}」错误。",
+                 font=("Microsoft YaHei UI", 8), fg="#6C757D", justify=tk.LEFT, anchor=tk.W).grid(row=1, column=0, columnspan=3, sticky=tk.W, padx=2, pady=(0, 5))
 
-        tk.Label(frame, text="3. 简历保存位置:", font=("Microsoft YaHei UI", 10, "bold")).grid(row=2, column=0, sticky=tk.W, pady=5)
+        tk.Label(frame, text="2. Excel 人员清单:", font=("Microsoft YaHei UI", 10, "bold")).grid(row=2, column=0, sticky=tk.W, pady=5)
+        self.entry_data = tk.Entry(frame, textvariable=self.data_path_var, font=("Microsoft YaHei UI", 10))
+        self.entry_data.grid(row=2, column=1, padx=10, pady=5, sticky=tk.EW, ipady=3)
+        tk.Button(frame, text="选择Excel...", command=self.browse_data, width=12).grid(row=2, column=2, pady=5)
+
+        tk.Label(frame, text="3. 简历保存位置:", font=("Microsoft YaHei UI", 10, "bold")).grid(row=3, column=0, sticky=tk.W, pady=5)
         self.entry_out = tk.Entry(frame, textvariable=self.out_dir_var, font=("Microsoft YaHei UI", 10))
-        self.entry_out.grid(row=2, column=1, padx=10, pady=5, sticky=tk.EW, ipady=3)
-        tk.Button(frame, text="浏览目录...", command=self.browse_out, width=12).grid(row=2, column=2, pady=5)
+        self.entry_out.grid(row=3, column=1, padx=10, pady=5, sticky=tk.EW, ipady=3)
+        tk.Button(frame, text="浏览目录...", command=self.browse_out, width=12).grid(row=3, column=2, pady=5)
 
         # 图片类型配置（可选：身份证/学历证书/社保等，动态增删，模板用 {{类型名}} 占位）
         types_outer = tk.LabelFrame(frame, text=" 图片类型配置（可选，留空则简历不含图片） ",
                                     font=("Microsoft YaHei UI", 10), bg="#FFFFFF")
-        types_outer.grid(row=3, column=0, columnspan=3, pady=5, sticky=tk.EW)
+        types_outer.grid(row=4, column=0, columnspan=3, pady=5, sticky=tk.EW)
         types_outer.columnconfigure(0, weight=1)
 
         type_btn_row = tk.Frame(types_outer, bg="#FFFFFF")
@@ -91,7 +94,7 @@ class ResumeGeneratorUI(BaseEngineUI):
 
         # 控制按钮区
         btn_frame = tk.Frame(frame)
-        btn_frame.grid(row=4, column=0, columnspan=3, pady=20, sticky=tk.EW)
+        btn_frame.grid(row=5, column=0, columnspan=3, pady=20, sticky=tk.EW)
         btn_frame.columnconfigure((0, 1), weight=1)
 
         self.btn_generate = tk.Button(btn_frame, font=("Microsoft YaHei UI", 11, "bold"))
@@ -101,12 +104,12 @@ class ResumeGeneratorUI(BaseEngineUI):
         self.btn_cancel.grid(row=0, column=1, padx=10, sticky=tk.EW, ipady=5)
 
         # 日志区
-        tk.Label(frame, text="运行追踪与日志:", font=("Microsoft YaHei UI", 10, "bold"), fg="#333333").grid(row=5, column=0, sticky=tk.W, pady=(10, 5))
+        tk.Label(frame, text="运行追踪与日志:", font=("Microsoft YaHei UI", 10, "bold"), fg="#333333").grid(row=6, column=0, sticky=tk.W, pady=(10, 5))
 
         self.log_text = scrolledtext.ScrolledText(
             frame, font=("Microsoft YaHei UI", 10), bg="#F8F9FA", fg="#2C3E50", padx=12, pady=12, relief=tk.FLAT, state='disabled'
         )
-        self.log_text.grid(row=6, column=0, columnspan=3, pady=5, sticky=tk.NSEW)
+        self.log_text.grid(row=7, column=0, columnspan=3, pady=5, sticky=tk.NSEW)
 
         # 富文本标签样式
         self.log_text.tag_config("INFO", foreground="#2C3E50")
